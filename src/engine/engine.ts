@@ -750,7 +750,16 @@ export class UniverseEngine {
 
   private buildAnchor() {
     const g = new THREE.Group();
-    this.starUniforms = { uTime: { value: 0 }, uBoost: { value: 1 } };
+    this.starUniforms = {
+      uTime: { value: 0 },
+      uBoost: { value: 1 },
+      uGravityCenter: { value: new THREE.Vector3() },
+      uGravityLocalCenter: { value: new THREE.Vector3() },
+      uGravityRadius: { value: 0 },
+      uGravityStrength: { value: 0 },
+      uGravityTime: { value: 0 },
+      uReverse: { value: 1 },
+    };
     const mat = new THREE.ShaderMaterial({ uniforms: this.starUniforms, vertexShader: starVert, fragmentShader: starFrag });
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(6, 96, 64), mat);
     g.add(mesh);
@@ -4213,7 +4222,7 @@ void main(){
   private updateGalaxyEntryFlight(dt: number) {
     const f = this.galaxyEntryFlight;
     if (!f) return;
-    f.t = Math.min(1, f.t + dt / 4.6);
+    f.t = Math.min(1, f.t + dt / 6.2);
     const p = f.t;
     const ease = 1 - Math.pow(1 - p, 3);
     const pulse = Math.sin(Math.min(p, 0.96) / 0.96 * Math.PI);
@@ -4442,13 +4451,13 @@ void main(){
       this.portal.t = Math.min(1, this.portal.t + dt / duration);
       if (this.portal.t >= 1) { this.portal.t = 0; this.portal.phase = next; }
     };
-    if (this.portal.phase === 'arming') advancePortal(this.reducedMotion ? 0.08 : 0.18, 'disturbance');
-    else if (this.portal.phase === 'disturbance') advancePortal(this.reducedMotion ? 0.12 : 0.42, 'deformation');
-    else if (this.portal.phase === 'deformation') advancePortal(this.reducedMotion ? 0.18 : 0.72, 'vortex');
-    else if (this.portal.phase === 'vortex') advancePortal(this.reducedMotion ? 0.22 : 1.0, 'collapse');
-    else if (this.portal.phase === 'collapse') advancePortal(this.reducedMotion ? 0.18 : 0.72, 'opening');
+    if (this.portal.phase === 'arming') advancePortal(this.reducedMotion ? 0.08 : 0.35, 'disturbance');
+    else if (this.portal.phase === 'disturbance') advancePortal(this.reducedMotion ? 0.12 : 0.85, 'deformation');
+    else if (this.portal.phase === 'deformation') advancePortal(this.reducedMotion ? 0.18 : 1.45, 'vortex');
+    else if (this.portal.phase === 'vortex') advancePortal(this.reducedMotion ? 0.22 : 2.20, 'collapse');
+    else if (this.portal.phase === 'collapse') advancePortal(this.reducedMotion ? 0.18 : 1.45, 'opening');
     else if (this.portal.phase === 'opening') {
-      advancePortal(this.reducedMotion ? 0.15 : (this.portalProfile === 'vault' ? 0.72 : 0.9), 'hold');
+      advancePortal(this.reducedMotion ? 0.15 : (this.portalProfile === 'vault' ? 1.20 : 1.40), 'hold');
       if (!this.portal.fired && this.portal.t > 0.72) {
         this.portal.fired = true;
         this.cb.onPortalPeak(this.portal.kind, this.portal.bodyId);
@@ -4552,7 +4561,7 @@ void main(){
       /* KAMUI — the jutsu script. One continuous flight, four beats:
          TEAR (reality rips at one point) → SUCK (+z, nearest-first wave)
          → TUNNEL (through the fold) → EJECT (−z, out of the marble). */
-      this.kamuiFlight = Math.min(1, this.kamuiFlight + dt / 3.6);
+      this.kamuiFlight = Math.min(1, this.kamuiFlight + dt / 6.8);
       const t = this.kamuiFlight;
       this.rig.killZoomMomentum();
       this.kamuiWarpFx = Math.sin(Math.min(t, 0.92) / 0.92 * Math.PI);
@@ -4629,7 +4638,7 @@ void main(){
          tunnel passes, then the −z counter-fold settles the destination into
          view. The script owns the dial until it lands. */
       const w = this.galaxyWarp;
-      w.t = Math.min(1, w.t + dt / 2.6);
+      w.t = Math.min(1, w.t + dt / 5.8);
       const t = w.t;
       this.rig.killZoomMomentum();
       this.kamuiWarpFx = Math.sin(Math.min(t, 0.92) / 0.92 * Math.PI) * 0.8;
@@ -5162,6 +5171,18 @@ void main(){
     if (starMesh) starMesh.rotation.y += dt * 0.15;
 
     this.starUniforms.uTime.value = this.clockT;
+    if (this.starUniforms.uGravityCenter) {
+      (this.starUniforms.uGravityCenter.value as THREE.Vector3).copy(this.portalGravityUniforms.center);
+      this.starUniforms.uGravityRadius.value = this.portalGravityUniforms.radius;
+      this.starUniforms.uGravityStrength.value = this.portalGravityUniforms.strength;
+      this.starUniforms.uGravityTime.value = this.portalGravityUniforms.time;
+      if (this.starUniforms.uReverse) this.starUniforms.uReverse.value = this.portalReverse;
+      if (starMesh && this.starUniforms.uGravityLocalCenter) {
+        this._vScratch4.copy(this.portalGravityUniforms.center);
+        starMesh.worldToLocal(this._vScratch4);
+        (this.starUniforms.uGravityLocalCenter.value as THREE.Vector3).copy(this._vScratch4);
+      }
+    }
     const boostTarget = 1 - this.coreT * 0.42;
     this.starUniforms.uBoost.value += (boostTarget - this.starUniforms.uBoost.value) * Math.min(1, dt * 3);
     this.bloomPass.strength = 0.18 - this.coreT * 0.08;
@@ -5452,12 +5473,15 @@ void main(){
     this.kamuiErase = THREE.MathUtils.damp(this.kamuiErase, targetKamui, 6, Math.max(dt, 0.001));
 
     if (this.backdropMat) {
-      /* inside a reality the jutsu only BENDS the sky halfway — a gentle
-         swirl that reveals the cosmos inside, never a total fold. The
-         full-strength bend stays on the multiverse boundary below. */
-      this.backdropMat.uniforms.uKamuiErase.value = this.kamuiErase * 0.5;
+      /* inside a reality the jutsu BENDS the sky during stage crossing or planet/vault portal */
+      const portalErase = this.portal.phase !== 'idle' ? this.portalVisualT * 0.75 : 0;
+      this.backdropMat.uniforms.uKamuiErase.value = Math.max(this.kamuiErase * 0.5, portalErase);
       this.backdropMat.uniforms.uTime.value = this.clockT;
-      this.camera.getWorldDirection(this._vDirScratch);
+      if (this.portal.phase !== 'idle' && this.portalVisualT > 0.001) {
+        this._vDirScratch.copy(this.portalGravityUniforms.center).sub(this.camera.position).normalize();
+      } else {
+        this.camera.getWorldDirection(this._vDirScratch);
+      }
       (this.backdropMat.uniforms.uVortexDir.value as THREE.Vector3).copy(this._vDirScratch);
     }
     if (this.giantMultiverseBoundaryMat) {

@@ -60,11 +60,29 @@ float fbm3(vec3 p){
 /* ------------------------------ star ------------------------------ */
 
 export const starVert = /* glsl */ `
+uniform vec3 uGravityLocalCenter; uniform float uGravityStrength; uniform float uGravityTime;
+uniform float uGravityRadius; uniform float uReverse;
 varying vec3 vN; varying vec3 vW; varying vec3 vP;
+${NOISE}
 void main(){
+  vec3 p = position;
+  vec3 delta = p - uGravityLocalCenter;
+  float dist = length(delta);
+  if (uGravityStrength > 0.001 && uGravityRadius > 0.0) {
+    float norm = clamp(dist / uGravityRadius, 0.0, 1.0);
+    float field = uGravityStrength * pow(1.0 - norm, 1.5);
+    if (field > 0.001) {
+      float rev = uReverse == 0.0 ? 1.0 : uReverse;
+      float ang = rev * field * 2.2 * (0.8 + 0.2 * sin(uGravityTime * 2.0 + dist * 0.05));
+      float cs = cos(ang), sn = sin(ang);
+      vec3 radial = normalize(delta + vec3(0.0001));
+      vec3 tangent = normalize(cross(vec3(0.0, 1.0, 0.0), radial) + vec3(0.0001));
+      p += (radial * (cs - 1.0) * 0.15 + tangent * sn * 0.18) * field * dist;
+    }
+  }
   vN = normalize(mat3(modelMatrix) * normal);
-  vW = (modelMatrix * vec4(position,1.0)).xyz;
-  vP = position;
+  vW = (modelMatrix * vec4(p, 1.0)).xyz;
+  vP = p;
   gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
 }`;
 
@@ -763,25 +781,25 @@ void main(){
   vColor = aColor;
   float tw = uTwinkle > 0.5 ? (0.76 + 0.24 * sin(uTime * 2.6 + position.x * 17.3 + position.y * 11.1 + position.z * 7.7)) : 1.0;
   vAlpha = aAlpha * tw;
-  /* Kamui tear vortex — a consumption wave expands from the tear point:
-     nearest points are bent, spun and pulled into the center first, then the
-     wave reaches farther ones (nearest-first suction). Consumed points dissolve.
-     uVortexRev flips the swirl for the return traversal and a negative
-     uVortexPull ejects matter back outward (white-hole release). */
+  /* Kamui tear vortex — high-torque logarithmic spiral suction toward uVortexC.
+     Nearby points spin rapidly and curve inward, creating smooth physical suction inertia. */
   vec3 vp = position;
   if (uVortexS > 0.001) {
     float d = distance(vp, uVortexC);
-    float infl = uVortexS * smoothstep(uVortexR, uVortexR * 0.1, d);
+    float infl = uVortexS * smoothstep(uVortexR, uVortexR * 0.05, d);
     if (infl > 0.001) {
-      vec3 axis = normalize(vec3(0.18, 1.0, 0.12));
+      vec3 axis = normalize(vec3(0.12, 1.0, 0.08));
       vec3 dir = vp - uVortexC;
       float rev = uVortexRev < 0.0 ? -1.0 : 1.0;
-      float a = infl * (5.0 + uVortexT * 3.5) * rev;
-      vec3 spun = dir * cos(a) + cross(axis, dir) * sin(a) * 1.15;
+      /* Logarithmic swirl rate increases near core */
+      float radiusRatio = clamp(d / max(uVortexR, 0.001), 0.01, 1.0);
+      float torque = (6.5 + 4.5 / sqrt(radiusRatio)) * uVortexS;
+      float a = infl * (torque + uVortexT * 4.0) * rev;
+      vec3 spun = dir * cos(a) + cross(axis, dir) * sin(a) * 1.18;
       float pullAmt = clamp(abs(uVortexPull), 0.0, 1.0);
-      float radial = infl * (0.5 + pullAmt * 0.5) * (uVortexPull < 0.0 ? -1.45 : 1.0);
-      vp = uVortexC + spun * max(0.035, 1.0 - radial);
-      vAlpha *= (1.0 - infl * (0.6 + pullAmt * 0.3));
+      float radial = infl * (0.55 + pullAmt * 0.45) * (uVortexPull < 0.0 ? -1.5 : 1.0);
+      vp = uVortexC + spun * max(0.02, 1.0 - radial);
+      vAlpha *= (1.0 - infl * (0.65 + pullAmt * 0.35));
     }
   }
   vec4 mv = modelViewMatrix * vec4(vp, 1.0);
