@@ -117,6 +117,11 @@ function smoothstepJs(e0: number, e1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/** Helper to write RGBA values to ImageData. Defined early to avoid hoisting issues. */
+function data255(d: Uint8ClampedArray, i: number, r: number, g: number, b: number, a: number): void {
+  d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = a;
+}
+
 /** Thin blazing photon ring. */
 function makeRingTexture(): THREE.CanvasTexture {
   const size = 256;
@@ -257,10 +262,6 @@ function makeHazeTexture(): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
-}
-
-function data255(d: Uint8ClampedArray, i: number, r: number, g: number, b: number, a: number): void {
-  d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = a;
 }
 
 /* ------------------------------ assembly -------------------------------- */

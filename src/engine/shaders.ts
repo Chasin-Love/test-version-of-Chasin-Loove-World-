@@ -1490,3 +1490,328 @@ void main(){
   gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.55));
 }
 `;
+
+/* ------------------------------ KAMUI - Dimensional Traversal ------------------------------ */
+
+export const kamuiSpacetimeVert = /* glsl */ `
+  uniform float uTime;
+  uniform float uPhase; // 0-1 animation phase
+  uniform float uRadius;
+  uniform float uStrength;
+  uniform vec3 uCenter;
+  
+  varying vec3 vWorldPos;
+  varying vec3 vLocalPos;
+  varying float vDist;
+  varying float vAngle;
+  varying vec2 vUv;
+  
+  ${NOISE}
+  
+  void main() {
+    vUv = uv;
+    vec3 localPos = position;
+    
+    // Calculate distance from vortex center
+    vec3 toCenter = localPos - uCenter;
+    float dist = length(toCenter);
+    vec3 dir = normalize(toCenter);
+    
+    // Angular position for differential rotation
+    vAngle = atan(dir.z, dir.x);
+    vDist = dist;
+    
+    // Gravitational field strength (inverse square + smooth cutoff)
+    float fieldStrength = uStrength * (1.0 - smoothstep(0.0, uRadius, dist));
+    
+    // Differential Keplerian rotation (inner regions spin faster)
+    float angularVel = 8.0 * fieldStrength / max(dist * 0.5, 0.1);
+    float rotationAngle = vAngle + angularVel * uTime * (1.0 - smoothstep(0.0, uRadius, dist));
+    
+    // Radial compression simulating spacetime curvature
+    float compression = 1.0 - fieldStrength * 0.6 * (1.0 - dist/uRadius);
+    
+    // Turbulent flow using simplex noise
+    vec3 noiseCoord = localPos * 2.5 + vec3(uTime * 0.8);
+    float turbulence = fbm(noiseCoord) * fieldStrength;
+    
+    // Vertical vortex funnel effect
+    float funnelY = -fieldStrength * 3.0 * exp(-dist * 0.8);
+    
+    // Apply transformations
+    vec3 compressedPos = dir * dist * compression;
+    compressedPos.y += funnelY;
+    
+    // Add turbulent displacement
+    compressedPos += normalize(dir) * turbulence * 0.3;
+    
+    vWorldPos = compressedPos;
+    vLocalPos = localPos;
+    
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(compressedPos, 1.0);
+  }
+`;
+
+export const kamuiSpacetimeFrag = /* glsl */ `
+  uniform float uTime;
+  uniform float uPhase;
+  uniform float uRadius;
+  uniform float uStrength;
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  
+  varying vec3 vWorldPos;
+  varying vec3 vLocalPos;
+  varying float vDist;
+  varying float vAngle;
+  varying vec2 vUv;
+  
+  ${NOISE}
+  
+  void main() {
+    float normDist = clamp(vDist / uRadius, 0.0, 1.0);
+    float fieldStrength = uStrength * (1.0 - normDist);
+    
+    // Gravitational redshift & accretion heating
+    vec3 darkMatter = vec3(0.02, 0.01, 0.05);
+    vec3 warpedSpace = uColorA * 0.3;
+    vec3 accretionHot = uColorB * 1.5;
+    vec3 eventHorizon = vec3(0.0, 0.0, 0.0);
+    
+    // Color based on gravitational field intensity
+    vec3 col = mix(darkMatter, warpedSpace, fieldStrength * 0.5);
+    col = mix(col, accretionHot, smoothstep(0.3, 0.9, fieldStrength));
+    
+    // Spiral arm structure
+    float spiralAngle = vAngle + vDist * 8.0 - uTime * 2.0;
+    float spiralArm = smoothstep(0.0, 0.15, abs(fract(spiralAngle / 6.28318) - 0.5));
+    col += accretionHot * spiralArm * fieldStrength * 0.8;
+    
+    // Turbulent energy streams
+    vec3 noiseCoord = vLocalPos * 3.0 + vec3(uTime * 1.2);
+    float turbulence = fbm(noiseCoord);
+    col += turbulence * fieldStrength * uColorB * 0.4;
+    
+    // Gravitational lensing arcs near event horizon
+    float lensingArc = smoothstep(0.85, 0.95, fieldStrength);
+    col += vec3(1.0, 0.8, 0.6) * lensingArc * 0.6;
+    
+    // Fade at edges
+    float alpha = smoothstep(0.0, 0.2, 1.0 - normDist) * (0.3 + fieldStrength * 0.7);
+    
+    gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.8));
+  }
+`;
+
+export const kamuiSingularityVert = /* glsl */ `
+  uniform float uTime;
+  uniform float uRadius;
+  
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+  varying float vAngle;
+  
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vec3 pos = position;
+    
+    // Subtle pulsation of event horizon
+    float pulse = 1.0 + 0.02 * sin(uTime * 3.0);
+    pos *= pulse;
+    
+    vWorldPos = pos;
+    vAngle = atan(pos.z, pos.x);
+    
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(pos, 1.0);
+  }
+`;
+
+export const kamuiSingularityFrag = /* glsl */ `
+  uniform float uTime;
+  uniform float uStrength;
+  uniform vec3 uColorA;
+  
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+  varying float vAngle;
+  
+  void main() {
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    float ndotv = dot(vNormal, viewDir);
+    
+    // Pure black event horizon
+    vec3 blackHole = vec3(0.0, 0.0, 0.0);
+    
+    // Photon ring with Doppler beaming
+    float rim = pow(1.0 - abs(ndotv), 3.0);
+    vec3 photonRing = uColorA * 2.0 * rim;
+    
+    // Doppler beaming (one side brighter due to rotation)
+    float doppler = 0.5 + 0.5 * sin(vAngle - uTime * 2.0);
+    photonRing *= 0.8 + 0.4 * doppler;
+    
+    // Einstein gravitational lensing arcs
+    float lensing = smoothstep(0.85, 1.0, rim);
+    vec3 lensArc = vec3(0.8, 0.6, 1.0) * lensing * 0.5;
+    
+    vec3 col = blackHole + photonRing + lensArc;
+    
+    gl_FragColor = vec4(col, clamp(rim * 0.9 + 0.1, 0.0, 1.0));
+  }
+`;
+
+export const kamuiTunnelVert = /* glsl */ `
+  uniform float uTime;
+  uniform float uPhase;
+  uniform float uLength;
+  
+  varying vec3 vWorldPos;
+  varying float vDepth;
+  varying vec2 vUv;
+  
+  ${NOISE}
+  
+  void main() {
+    vUv = uv;
+    vec3 pos = position;
+    
+    // Spiraling tunnel geometry
+    float twist = uTime * 1.5 + pos.z * 0.8;
+    float radius = 0.5 + 0.3 * sin(twist * 3.0);
+    
+    // Apply spiral transformation
+    float cosT = cos(twist);
+    float sinT = sin(twist);
+    mat2 rot = mat2(cosT, -sinT, sinT, cosT);
+    pos.xy = rot * pos.xy * radius;
+    
+    // Tunnel wall turbulence
+    vec3 noiseCoord = pos * 2.0 + vec3(uTime * 0.8);
+    float turbulence = fbm(noiseCoord) * 0.15;
+    pos += normalize(pos) * turbulence;
+    
+    vDepth = pos.z / uLength;
+    vWorldPos = pos;
+    
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(pos, 1.0);
+  }
+`;
+
+export const kamuiTunnelFrag = /* glsl */ `
+  uniform float uTime;
+  uniform float uPhase;
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  
+  varying vec3 vWorldPos;
+  varying float vDepth;
+  varying vec2 vUv;
+  
+  ${NOISE}
+  
+  void main() {
+    // Depth-based coloring
+    float depthNorm = clamp(abs(vDepth), 0.0, 1.0);
+    
+    // Base tunnel colors
+    vec3 innerColor = uColorA * 1.2;
+    vec3 outerColor = uColorB * 0.6;
+    vec3 coreColor = vec3(0.9, 0.7, 1.0);
+    
+    vec3 col = mix(outerColor, innerColor, 1.0 - depthNorm);
+    
+    // Spiraling energy streams
+    float spiral = fract(vUv.y * 8.0 - uTime * 2.0 + vUv.x * 3.0);
+    float stream = smoothstep(0.0, 0.2, abs(fract(spiral) - 0.5));
+    col += coreColor * stream * 0.5;
+    
+    // Turbulent energy patterns
+    vec3 noiseCoord = vWorldPos * 3.0 + vec3(uTime * 1.5);
+    float turbulence = fbm(noiseCoord);
+    col += turbulence * innerColor * 0.3;
+    
+    // Depth fade
+    float alpha = smoothstep(0.0, 0.3, 1.0 - depthNorm) * (0.4 + turbulence * 0.4);
+    
+    gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.7));
+  }
+`;
+
+export const kamuiTearVert = /* glsl */ `
+  uniform float uTime;
+  uniform float uPhase;
+  uniform float uSize;
+  
+  varying vec3 vWorldPos;
+  varying float vEdgeFactor;
+  varying vec2 vUv;
+  
+  ${NOISE}
+  
+  void main() {
+    vUv = uv;
+    vec3 pos = position;
+    
+    // Reality rupture deformation
+    float rupture = sin(uTime * 4.0) * 0.1;
+    pos.z += rupture * (1.0 - length(uv - 0.5) * 2.0);
+    
+    // Fractured edge displacement
+    vec3 noiseCoord = pos * 4.0 + vec3(uTime * 2.0);
+    float fracture = fbm(noiseCoord) * 0.2;
+    
+    // Edge factor for rim lighting
+    float distFromCenter = length(uv - 0.5);
+    vEdgeFactor = smoothstep(0.3, 0.5, distFromCenter);
+    
+    pos += normalize(pos) * fracture * vEdgeFactor;
+    
+    vWorldPos = pos;
+    
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(pos, 1.0);
+  }
+`;
+
+export const kamuiTearFrag = /* glsl */ `
+  uniform float uTime;
+  uniform float uPhase;
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  
+  varying vec3 vWorldPos;
+  varying float vEdgeFactor;
+  varying vec2 vUv;
+  
+  ${NOISE}
+  
+  void main() {
+    // Void center
+    vec3 voidColor = vec3(0.02, 0.01, 0.03);
+    
+    // Fractured reality edges
+    vec3 realityEdge = uColorA * 0.8;
+    vec3 energeticRim = uColorB * 1.5;
+    
+    // Base color gradient from center to edge
+    float distFromCenter = length(uv - 0.5);
+    vec3 col = mix(voidColor, realityEdge, distFromCenter * 2.0);
+    
+    // Fracture lines
+    vec3 noiseCoord = vWorldPos * 6.0 + vec3(uTime * 3.0);
+    float fractures = fbm(noiseCoord);
+    float fractureLines = smoothstep(0.0, 0.15, abs(fract(fractures * 8.0) - 0.5));
+    col += energeticRim * fractureLines * vEdgeFactor * 0.6;
+    
+    // Energetic rim glow
+    float rimGlow = vEdgeFactor * (0.5 + 0.5 * sin(uTime * 5.0));
+    col += energeticRim * rimGlow * 0.4;
+    
+    // Pulsing dimensional energy
+    float pulse = 0.5 + 0.5 * sin(uTime * 6.0 + distFromCenter * 10.0);
+    col += uColorB * pulse * vEdgeFactor * 0.3;
+    
+    float alpha = vEdgeFactor * (0.3 + 0.5 * rimGlow) + (1.0 - vEdgeFactor) * 0.1;
+    
+    gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.8));
+  }
+`;
