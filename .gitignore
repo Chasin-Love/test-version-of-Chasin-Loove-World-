@@ -1,0 +1,35 @@
+# Build artifacts
+dist/
+build/
+.vite/
+
+# Dependencies
+node_modules/
+bun.lock
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors & IDEs
+.vscode/
+.idea/
+zed/
+zcode/
+.canvas-meta.json
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+coverage/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
