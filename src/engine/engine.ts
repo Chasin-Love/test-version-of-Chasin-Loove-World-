@@ -17,6 +17,7 @@ import {
 } from './shaders';
 import { createBlackHole, type BlackHoleVisual } from './blackhole';
 import { CameraRig } from './cameraRig';
+import { KamuiEffect } from './kamui';
 import type { CosmicBody } from '../types';
 import { REALITIES, RealityConfig, GalaxyClusterData, GalaxyData } from '../realities';
 import { generateStellarSystemForGalaxy } from '../realities/galaxyGenerator';
@@ -343,6 +344,7 @@ export class UniverseEngine {
   /* Kamui — the teleportation jutsu. kamuiFlight: 0..1 scripted progress.
      kamuiWarpFx: the tunnel envelope (fov kick + screen swirl). The suck
      drifts the focus along +z into the vortex; the eject throws it along -z. */
+  private kamuiEffect!: KamuiEffect;
   private kamuiFlight: number | null = null;
   private kamuiFromZoom = 0;
   private arrivalZoom = 0.787;
@@ -514,6 +516,7 @@ export class UniverseEngine {
     this.buildMultiverse();
     this.buildMeteors();
     this.buildSurface();
+    this.kamuiEffect = new KamuiEffect(this.scene, this.camera);
     this.buildKamuiTunnel();
     this.buildGalaxyTear();
     this.buildIntroMarble();
@@ -4879,6 +4882,7 @@ void main(){
       focusMin,
       focusMax,
     });
+    this.kamuiEffect.update(dt);
     this.updateBodies(dt);
     this.updateMeteors(dt);
     this.updateLevels(dt);
