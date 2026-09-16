@@ -18,6 +18,7 @@
  */
 
 import * as THREE from 'three';
+import { smoothstep as smoothstepJs } from './math';
 
 /* ------------------------- tiny value-noise (CPU) ------------------------ */
 
@@ -110,11 +111,6 @@ function makeDiskTexture(rs: number): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
-}
-
-function smoothstepJs(e0: number, e1: number, x: number): number {
-  const t = clamp01((x - e0) / (e1 - e0));
-  return t * t * (3 - 2 * t);
 }
 
 /** Helper to write RGBA values to ImageData. Defined early to avoid hoisting issues. */

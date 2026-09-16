@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { REALITIES, getReality, RealityConfig, GalaxyClusterData, GalaxyData, createNewRealityConfig } from '../realities';
+import { HIERARCHY_STAGES } from '../realities/hierarchyStages';
 import { actions, getState, useUniverse } from '../state';
 import { Globe, Sparkles, Orbit, Layers, ChevronRight, Compass, Zap, Eye, Edit3, Shield, ShieldCheck, Flame, X, Plus, Trash2, CircleDot } from 'lucide-react';
 import { CreateRealityModal } from './CreateRealityModal';
@@ -56,19 +57,7 @@ export const MultiverseBar: React.FC<MultiverseBarProps> = ({
   const allRealities: RealityConfig[] = REALITIES;
   const activeReality = getReality(activeRealityId, universeState.customRealityDescriptions);
 
-  const hierarchyStages = [
-    { label: 'Multiverse', short: 'Bulk', key: 'MULTIVERSE', desc: 'Omni-dimensional bulk space hosting all parallel bubble realities' },
-    { label: 'Reality / Universe', short: 'Reality', key: 'REALITY', desc: 'Isolated universe continuum with unique physical parameters' },
-    { label: 'Cosmic Web', short: 'Web', key: 'COSMIC WEB', desc: 'Observable universe dark matter filaments & voids' },
-    { label: 'Supercluster Complex', short: 'Complex', key: 'COMPLEX', desc: 'Hyper-scale gravitational complex containing multiple superclusters' },
-    { label: 'Supercluster', short: 'Supercluster', key: 'SUPERCLUSTER', desc: 'Virgo & Laniakea supercluster galaxy streams' },
-    { label: 'Galaxy Cluster / Group', short: 'Cluster', key: 'GALAXY CLUSTER', desc: 'Local group, interacting galaxies & satellite cluster' },
-    { label: 'Galaxy', short: 'Galaxy', key: 'SPIRAL GALAXY', desc: 'The Milliandra galactic disk & luminous core' },
-    { label: 'Galactic Region', short: 'Region', key: 'REGION', desc: 'Local galactic quadrant & stellar neighborhood' },
-    { label: 'Spiral Arm', short: 'Arm', key: 'SPIRAL ARM', desc: 'Local density wave spur & starburst arm' },
-    { label: 'Star-Forming Region', short: 'Nursery', key: 'STAR-FORMING', desc: 'Stellar nursery & molecular cloud forge' },
-    { label: 'Stellar System', short: 'System', key: 'STELLAR SYSTEM', desc: 'Planets, moons, rings & central star' },
-  ];
+  const hierarchyStages = HIERARCHY_STAGES;
 
   const activeStageIndex = hierarchyStages.findIndex(s => currentScaleLabel.toUpperCase().includes(s.key));
   const currentIdx = activeStageIndex !== -1 ? activeStageIndex : (currentScaleLabel.includes('SURFACE') || currentScaleLabel.includes('APPROACH') ? 10 : 10);

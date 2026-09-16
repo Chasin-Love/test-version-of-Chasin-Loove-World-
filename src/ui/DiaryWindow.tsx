@@ -6,6 +6,7 @@ import { sfxConnect, sfxTick, startRecording, stopRecording } from '../audio';
 import Book from './Book';
 import { IcBook, IcClose, IcCompress, IcCopy, IcDownload, IcEdit, IcExpand, IcGlobe, IcImage, IcInline, IcMic, IcMin, IcMoon, IcPause, IcPlay, IcPlus, IcSearch, IcStar, IcStop, IcTrash, useUniverse } from './bits';
 import { toast } from './toast';
+import { readAsDataURL, synthBars } from './lib';
 import { AudioPlate, VideoPlate, ImageOrGifPlate, FileOrCodePlate } from './MediaPlates';
 
 export interface WinRect { x: number; y: number; w: number; h: number; }
@@ -741,28 +742,6 @@ async function exportPage(entry: DiaryEntry, planet: CosmicBody, pageWidthPx?: n
     'image/png',
     1.0,
   );
-}
-
-function readAsDataURL(f: File): Promise<string> {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result as string);
-    r.onerror = () => rej(new Error('read failed'));
-    r.readAsDataURL(f);
-  });
-}
-
-function synthBars(seedStr: string, n: number): number[] {
-  let h = 2166136261;
-  for (let i = 0; i < seedStr.length; i++) { h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619); }
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) {
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    const v = ((h >>> 0) % 1000) / 1000;
-    const env = Math.sin((i / n) * Math.PI) * 0.7 + 0.3;
-    out.push(Math.max(0.08, v * env));
-  }
-  return out;
 }
 
 const TONES: { id: string; label: string; css: string }[] = [

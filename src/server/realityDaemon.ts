@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { sanitizeFolderName, isInside } from './paths';
 
 export interface DaemonStatus {
   active: boolean;
@@ -82,13 +83,12 @@ class RealitySyncDaemon {
         const folderPath = path.join(this.realitiesDir, dirent.name);
         const indexPath = path.join(folderPath, 'index.ts');
         const surfacePath = path.join(folderPath, 'surface.ts');
+        const varName = `${dirent.name.replace(/[^a-zA-Z0-9]/g, '')}Reality`;
+        const id = dirent.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+        const title = dirent.name.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase());
 
         // Check if index.ts exists; if missing, repair
         if (!fs.existsSync(indexPath)) {
-          const varName = `${dirent.name.replace(/[^a-zA-Z0-9]/g, '')}Reality`;
-          const id = dirent.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-          const title = dirent.name.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase());
-
           const indexCode = `import { RealityConfig } from '../types';\n\nexport const ${varName}: RealityConfig = {\n  id: '${id}',\n  name: '${title}',\n  codeName: '${id.toUpperCase()}',\n  spectral: 'Class A Luminary Continuum',\n  colorA: '#00f5d4',\n  colorB: '#8b5cf6',\n  description: 'Synthesized parallel reality synchronized by Reality Daemon.',\n  bodies: [\n    {\n      id: 'anchor',\n      name: '${title} Anchor Star',\n      kind: 'star',\n      createdAt: Date.now(),\n      radius: 7.5,\n      palette: { deep: '#0f172a', base: '#00f5d4', high: '#ffffff', atmo: '#8b5cf6', ice: '#c084fc' },\n      orbit: { a: 0, speed: 0, phase: 0, incl: 0 },\n    }\n  ],\n};\n\nexport * from './surface';\n`;
 
           fs.writeFileSync(indexPath, indexCode, 'utf-8');
@@ -97,7 +97,11 @@ class RealitySyncDaemon {
 
         // Check if surface.ts exists; if missing, repair
         if (!fs.existsSync(surfacePath)) {
-          const surfaceCode = `export interface SurfaceTerrain {\n  biome: string;\n  elevation: number[];\n  ambientTempK: number;\n}\n\nexport const defaultSurface: SurfaceTerrain = {\n  biome: 'Harmonic Crystal Basin',\n  elevation: [1.2, 2.4, 3.1, 2.8],\n  ambientTempK: 288,\n};\n`;
+          // Must match the real UniverseSurfaceConfig schema (same as the
+          // server's create-folder generator) so daemon-repaired realities
+          // register a proper surface preset instead of a foreign interface.
+          const surfaceVarName = `${varName}Surface`;
+          const surfaceCode = `import { UniverseSurfaceConfig } from '../../engine/surface/types';\n\nexport const ${surfaceVarName}: UniverseSurfaceConfig = {\n  realityId: '${id}',\n  name: '${title}',\n  colorA: '#00f5d4',\n  colorB: '#8b5cf6',\n  deepColor: '#030108',\n  starColor: '#ffeedd',\n  webFilaments: '#00f5d4',\n  nebulaIntensity: 1.0,\n  dustLaneIntensity: 0.8,\n  starDensity: 0.85,\n};\n`;
           fs.writeFileSync(surfacePath, surfaceCode, 'utf-8');
           this.log('AUTOREPAIR_SURFACE', `Generated missing surface.ts for src/realities/${dirent.name}`);
         }
@@ -138,19 +142,28 @@ class RealitySyncDaemon {
       }
 
       if (!targetFolder && folderName) {
-        targetFolder = folderName;
+        // folderName may arrive straight from a request body: sanitize before
+        // it is used to build filesystem paths (path traversal guard).
+        targetFolder = sanitizeFolderName(folderName);
       }
 
       if (!targetFolder) {
         return { success: false, error: `No active folder found matching ${realityId || folderName}` };
       }
 
+      if (targetFolder === 'bin' || targetFolder === '.bin') {
+        return { success: false, error: 'Refusing to move the bin directory into itself.' };
+      }
+
       const srcPath = path.join(this.realitiesDir, targetFolder);
+      const destPath = path.join(this.binDir, targetFolder);
+      if (!isInside(this.realitiesDir, srcPath) || !isInside(this.binDir, destPath)) {
+        return { success: false, error: 'Resolved path escaped the realities tree; refused.' };
+      }
       if (!fs.existsSync(srcPath)) {
         return { success: false, error: `Directory ${srcPath} does not exist.` };
       }
 
-      const destPath = path.join(this.binDir, targetFolder);
       // If destination exists, clean it first
       if (fs.existsSync(destPath)) {
         fs.rmSync(destPath, { recursive: true, force: true });
@@ -196,6 +209,9 @@ class RealitySyncDaemon {
 
       const srcPath = path.join(this.binDir, targetFolder);
       const destPath = path.join(this.realitiesDir, targetFolder);
+      if (!isInside(this.binDir, srcPath) || !isInside(this.realitiesDir, destPath)) {
+        return { success: false, error: 'Resolved path escaped the realities tree; refused.' };
+      }
 
       if (fs.existsSync(destPath)) {
         fs.rmSync(destPath, { recursive: true, force: true });
@@ -240,6 +256,9 @@ class RealitySyncDaemon {
       }
 
       const targetPath = path.join(this.binDir, targetFolder);
+      if (!isInside(this.binDir, targetPath)) {
+        return { success: false, error: 'Resolved path escaped the bin tree; refused.' };
+      }
       fs.rmSync(targetPath, { recursive: true, force: true });
       this.log('PURGE_BIN', `Permanently erased src/realities/bin/${targetFolder}`);
       return { success: true };
@@ -257,7 +276,9 @@ class RealitySyncDaemon {
 
       for (const dirent of items) {
         if (dirent.isDirectory()) {
-          fs.rmSync(path.join(this.binDir, dirent.name), { recursive: true, force: true });
+          const target = path.join(this.binDir, dirent.name);
+          if (!isInside(this.binDir, target)) continue;
+          fs.rmSync(target, { recursive: true, force: true });
           count++;
         }
       }
@@ -278,6 +299,12 @@ class RealitySyncDaemon {
 
     try {
       const cleanNew = newName.trim().replace(/[^a-zA-Z0-9]/g, '');
+      // An empty result must be rejected outright: otherwise newPath would
+      // resolve to the realities directory itself and the existsSync cleanup
+      // below would recursively delete the entire realities tree.
+      if (!cleanNew) {
+        return { success: false, error: 'New name contains no valid characters.' };
+      }
       const newFolderName = cleanNew.charAt(0).toLowerCase() + cleanNew.slice(1);
 
       const items = fs.readdirSync(this.realitiesDir, { withFileTypes: true });
@@ -305,6 +332,9 @@ class RealitySyncDaemon {
 
       const oldPath = path.join(this.realitiesDir, oldFolderName);
       const newPath = path.join(this.realitiesDir, newFolderName);
+      if (!isInside(this.realitiesDir, oldPath) || !isInside(this.realitiesDir, newPath)) {
+        return { success: false, error: 'Resolved path escaped the realities tree; refused.' };
+      }
 
       if (fs.existsSync(newPath)) {
         fs.rmSync(newPath, { recursive: true, force: true });

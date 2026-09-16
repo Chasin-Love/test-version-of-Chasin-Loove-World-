@@ -93,22 +93,12 @@ function createSnapshot(s: UniverseState): UniverseState {
 }
 
 /**
- * Prime recent diary timestamp on first boot or idle return so living streak indicators
- * remain active without modifying user-authored text content.
+ * Boot-time state priming: synchronizes runtime realities with custom
+ * realities & deletions. (Historically this also back-dated the newest diary
+ * entry's `updatedAt` to keep streak indicators alive — removed: user content
+ * timestamps must never be mutated, streaks should reflect real activity.)
  */
 function primeState(p: UniverseState): UniverseState {
-  const nowMs = Date.now();
-  const RECENT_THRESHOLD = 2 * DAY_MS;
-  const hasRecent = p.entries.some(
-    (e) => Math.max(e.createdAt, e.updatedAt) > nowMs - RECENT_THRESHOLD
-  );
-  if (!hasRecent && p.entries.length) {
-    const latest = [...p.entries].sort(
-      (a, b) =>
-        Math.max(b.createdAt, b.updatedAt) - Math.max(a.createdAt, a.updatedAt)
-    )[0];
-    latest.updatedAt = nowMs - 3600000;
-  }
   // Synchronize runtime realities with custom realities & deletions
   setRuntimeRealities(
     computeAllRealities(p.customRealities, p.deletedRealityIds, p.customRealityDescriptions, p.customGalaxies, p.customRealityMeta as Record<string, RealityMetaOverride>)

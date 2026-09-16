@@ -2,21 +2,8 @@ import * as THREE from 'three';
 import type { RealityConfig } from '../../realities/types';
 import { universeSurfaceVert, universeSurfaceFrag } from './surfaceShaders';
 import { getSurfaceConfigForReality } from './surfacePresets';
+import { makeGlowTexture } from '../math';
 import type { UniverseSurfaceConfig, UniverseSurfaceUpdateParams } from './types';
-
-/**
- * Creates a circular soft radial gradient texture for star sprites.
- */
-function makeGlowTexture(size: number, stops: [number, string][]): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  stops.forEach(([pos, col]) => g.addColorStop(pos, col));
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  return new THREE.CanvasTexture(c);
-}
 
 /**
  * UniverseSurfaceManager

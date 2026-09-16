@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { realityDaemon } from './src/server/realityDaemon';
+import { sanitizeFolderName, isInside } from './src/server/paths';
 
 async function startServer() {
   const app = express();
@@ -146,7 +147,9 @@ async function startServer() {
       }
 
       // Generate clean folder name (e.g., "test" -> "test", "Chronos Paradox" -> "chronosParadox", "X" -> "x")
-      let folderName = customFolderName;
+      // customFolderName arrives from the request body: sanitize it like any
+      // other user path component before it reaches path.join.
+      let folderName = sanitizeFolderName(customFolderName);
       if (!folderName) {
         const rawSanitized = name.replace(/[^a-zA-Z0-9\s-_]/g, '').trim();
         const words = rawSanitized.split(/[\s-_]+/);
@@ -161,6 +164,9 @@ async function startServer() {
 
       const realitiesDir = path.join(process.cwd(), 'src', 'realities');
       const targetDir = path.join(realitiesDir, folderName);
+      if (!isInside(realitiesDir, targetDir)) {
+        return res.status(400).json({ success: false, error: 'Invalid folder name' });
+      }
 
       if (!fs.existsSync(targetDir)) {
         fs.mkdirSync(targetDir, { recursive: true });
@@ -304,7 +310,11 @@ export * from './surface';
         const cleanRid = realityId.toLowerCase().replace(/[^a-z0-9]/g, '');
         const cleanDir = d.name.toLowerCase().replace(/[^a-z0-9]/g, '');
         if (cleanDir === cleanRid) {
-          fs.rmSync(path.join(realitiesDir, d.name), { recursive: true, force: true });
+          const target = path.join(realitiesDir, d.name);
+          // d.name comes from readdir so it is already a direct child, but
+          // assert containment before the recursive delete regardless.
+          if (!isInside(realitiesDir, target)) continue;
+          fs.rmSync(target, { recursive: true, force: true });
           return res.json({ success: true, deleted: d.name });
         }
       }

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { HIERARCHY_STAGES } from '../realities/hierarchyStages';
 
 export interface CosmicWebSettings {
   mode: 'simulation' | 'observational';
@@ -25,14 +26,16 @@ export const CosmicWebHUD: React.FC<CosmicWebHUDProps> = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
 
-  // Map scale label to hierarchical level
+  // Map scale label to hierarchical level. Stage keys come from the shared
+  // HIERARCHY_STAGES table so this HUD cannot drift from the engine ladder.
   const getLODInfo = (label: string) => {
     const l = label.toUpperCase();
-    if (l.includes('MULTIVERSE') || l.includes('MACRO') || l.includes('UNIVERSE')) {
+    const stage = (i: number) => HIERARCHY_STAGES[i].key;
+    if (l.includes(stage(0)) || l.includes('MACRO') || l.includes('UNIVERSE')) {
       return { level: 'LEVEL 0', name: 'Observable Universe Scale', distance: '~28.5 Gpc (93 Gly)', unit: 'Gigaparsec (Gpc)' };
     } else if (l.includes('WEB') || l.includes('COSMIC')) {
       return { level: 'LEVEL 1', name: 'Large-Scale Cosmic Web', distance: '~500 Mpc', unit: 'Megaparsec (Mpc)' };
-    } else if (l.includes('SUPERCLUSTER') || l.includes('BEACON')) {
+    } else if (l.includes(stage(4)) || l.includes('BEACON')) {
       return { level: 'LEVEL 2', name: 'Filament & Void Complex', distance: '~50 Mpc', unit: 'Megaparsec (Mpc)' };
     } else if (l.includes('CLUSTER')) {
       return { level: 'LEVEL 3', name: 'Galaxy Cluster / Node', distance: '~5 Mpc', unit: 'Megaparsec (Mpc)' };

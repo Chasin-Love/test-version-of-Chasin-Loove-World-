@@ -6,5 +6,4 @@
 export * from './engine';
 export * from './cameraRig';
 export * from './blackhole';
-export { KamuiEffect, type KamuiConfig } from './kamui';
 export * from './shaders';

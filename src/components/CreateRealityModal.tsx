@@ -49,16 +49,9 @@ export const CreateRealityModal: React.FC<CreateRealityModalProps> = ({
       galaxyCount,
     };
 
-    // Trigger backend folder and file generation in src/realities/<name>/
-    try {
-      fetch('/api/realities/create-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).catch((err) => console.warn('Backend reality folder creation notice:', err));
-    } catch (err) {
-      console.warn('Backend API request error:', err);
-    }
+    // Disk sync is handled by actions.createReality (single POST to
+    // /api/realities/create-folder) — firing it here too would create the
+    // folder twice.
 
     onCreate(payload);
 

@@ -12,6 +12,7 @@
 /* -------------------------------------------------------------------------- */
 
 import * as THREE from 'three';
+import { clamp, damp } from './math';
 
 export const DIST_BASE = 3.0;
 export const DIST_SPAN = 800000;
@@ -42,10 +43,6 @@ const KEY_PAN_SPEED = 0.55; /* × distance per second */
 const FLING_PX_CAP = 2600; /* px/s — fastest flick the rig believes */
 const ORBIT_FLING_CAP = 2.2; /* rad/s */
 const PAN_FLING_FACTOR = 2.2; /* × distance per second */
-
-const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
-const damp = (cur: number, target: number, lambda: number, dt: number) =>
-  cur + (target - cur) * (1 - Math.exp(-lambda * dt));
 
 export interface RigFrame {
   /** world-space point the camera orbits this frame (body position or origin) */

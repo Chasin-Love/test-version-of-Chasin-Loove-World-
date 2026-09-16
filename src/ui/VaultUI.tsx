@@ -19,23 +19,12 @@ import {
   IcScan, IcSearch, IcTerminal, IcTrash, IcUnlock, IcUser, useUniverse,
 } from './bits';
 import { toast } from './toast';
+import { readAsDataURL } from './lib';
 import { FileManager } from './FileManager';
 import { HexInspector, KindGlyph, TilePreview, WaveStripLocal, seedRnd } from './VaultBits';
 
 /* ================================ helpers ================================ */
 
-const readAsDataURL = (f: File) => new Promise<string>((res, rej) => {
-  const r = new FileReader();
-  r.onload = () => res(r.result as string);
-  r.onerror = () => rej(new Error('read failed'));
-  r.readAsDataURL(f);
-});
-const blobToDataUrl = (b: Blob) => new Promise<string>((res, rej) => {
-  const r = new FileReader();
-  r.onload = () => res(r.result as string);
-  r.onerror = () => rej(new Error('read failed'));
-  r.readAsDataURL(b);
-});
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const videoEvent = (v: HTMLVideoElement, ev: string) => new Promise<void>((res) => {
   const h = () => { v.removeEventListener(ev, h); res(); };

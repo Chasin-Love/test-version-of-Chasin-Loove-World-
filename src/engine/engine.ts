@@ -15,14 +15,24 @@ import {
   demonCoreVert, demonCoreFrag,
   multiverseBoundaryVert, multiverseBoundaryFrag,
 } from './shaders';
+import { smoothstep, makeGlowTexture } from './math';
 import { UniverseSurfaceManager } from './surface';
 import { createBlackHole, type BlackHoleVisual } from './blackhole';
 import { CameraRig } from './cameraRig';
 import type { CosmicBody } from '../types';
 import { REALITIES, RealityConfig, GalaxyClusterData, GalaxyData } from '../realities';
+import { HIERARCHY_DIALS } from '../realities/hierarchyStages';
 import { generateStellarSystemForGalaxy } from '../realities/galaxyGenerator';
 import { calculateKeplerPosition, calculatePhysics } from '../physics/physicsEngine';
 import { isPerformanceEnabled, perfMark, perfMeasure, recordFrame } from '../performance';
+import {
+  WEB_CEILING, WEB_EDGE_TRIGGER, WARP_ZOOM_VEL,
+  MULTIVERSE_FLOOR_CLAMP, MULTIVERSE_FLOOR_RETURN, RETURN_ZOOM_VEL, REALITY_FLOOR,
+  GALAXY_BAND_UPPER, GALAXY_BAND_LOWER, GALAXY_ARRIVE_CROSS, GALAXY_DESCEND_CROSS,
+  GALAXY_ASCEND_ENTER, GALAXY_ASCEND_CROSS, GALAXY_DIAL, BAND_LATCH_TTL,
+} from './systems/stageThresholds';
+import { SCALE_BANDS, highScaleLabel } from './systems/levelSystem';
+import { PORTAL_PHASE_WEIGHTS, portalTransitionFor, type PortalPhase } from './systems/portalPhases';
 
 interface ShootingMeteor {
   pos: THREE.Vector3;
@@ -153,10 +163,6 @@ interface InnerSystem {
 
 const DAY = 86400000;
 
-function smoothstep(a: number, b: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-}
 function windowFn(d: number, inA: number, inB: number, outA: number, outB: number): number {
   return smoothstep(inA, inB, d) * (1 - smoothstep(outA, outB, d));
 }
@@ -183,26 +189,6 @@ function cpuFbm(x: number, y: number): number {
 interface BeltRock {
   pos: THREE.Vector3; scale: THREE.Vector3;
   q: THREE.Quaternion; axis: THREE.Vector3; speed: number;
-}
-
-function makeGlowTexture(size: number, stops: [number, string][]): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const g = c.getContext('2d')!;
-  g.clearRect(0, 0, size, size);
-  const half = size / 2;
-  const radius = half - 1;
-  const grad = g.createRadialGradient(half, half, 0, half, half, radius);
-  stops.forEach(([p, col]) => grad.addColorStop(p, col));
-  g.fillStyle = grad;
-  g.beginPath();
-  g.arc(half, half, radius, 0, Math.PI * 2);
-  g.fill();
-  const t = new THREE.CanvasTexture(c);
-  t.generateMipmaps = false;
-  t.minFilter = THREE.LinearFilter;
-  t.magFilter = THREE.LinearFilter;
-  return t;
 }
 
 function makeGalaxySprite(warm: boolean): THREE.Texture {
@@ -276,7 +262,7 @@ export class UniverseEngine {
   private coreActive = false; private coreT = 0;
   private epoch = Date.now() - 400 * DAY;
   private portal = {
-    phase: 'idle' as 'idle' | 'arming' | 'disturbance' | 'deformation' | 'vortex' | 'collapse' | 'opening' | 'hold' | 'out',
+    phase: 'idle' as PortalPhase,
     t: 0, fired: false, kind: 'diary' as 'diary' | 'vault', bodyId: '',
   };
   /* Inner-galaxy worlds are synthetic runtime bodies, so their portal target
@@ -347,7 +333,7 @@ export class UniverseEngine {
      drifts the focus along +z into the vortex; the eject throws it along -z. */
   private kamuiFlight: number | null = null;
   private kamuiFromZoom = 0;
-  private arrivalZoom = 0.787;
+  private arrivalZoom = REALITY_FLOOR;
   private warpDir: 'toMultiverse' | 'toWeb' = 'toMultiverse';
   private postWarpZoom: number | null = null;
   private kamuiWarpFx = 0;
@@ -3612,7 +3598,7 @@ void main(){
     this.activeGalaxyName = null;
     this.galaxyFocusId = null;
     if (this.cosmicStage === 'web') this.beginKamui('toMultiverse');
-    else { this.realityFocused = true; this.rig.setOrbit(null, 1.05); this.rig.setZoomTarget(this.activeReality ? CameraRig.zoomTOf(this.activeReality.bubbleSize * 5.5) : 0.787); }
+    else { this.realityFocused = true; this.rig.setOrbit(null, 1.05); this.rig.setZoomTarget(this.activeReality ? CameraRig.zoomTOf(this.activeReality.bubbleSize * 5.5) : REALITY_FLOOR); }
   }
   zoomToSystem() {
     this.cancelGalaxyEntryFlight();
@@ -3635,21 +3621,21 @@ void main(){
       else this.beginKamui('toMultiverse', 0.88);
       return;
     }
-    // stages 2..10 — cosmic web side. Dials calibrated against the scale-label
-    // distance windows (dist = 3 · 800000^zoomT) so each stage LANDS inside its
-    // own label band: web .858 · complex .842 · supercluster .773 · cluster .722
-    // · galaxy .668 · region .589 · arm .503 · nursery .411 · system .15
-    const dial = [0, 0.88, 0.858, 0.842, 0.773, 0.722, 0.668, 0.589, 0.503, 0.411, 0.15][stageIndex] ?? 0.15;
+    // stages 2..10 — cosmic web side. Dials live in the shared stage table
+    // (src/realities/hierarchyStages.ts), calibrated against the scale-label
+    // distance windows (dist = 3 · 800000^zoomT) so each stage LANDS inside
+    // its own label band.
+    const dial = HIERARCHY_DIALS[stageIndex] ?? 0.15;
     const phi = stageIndex === 6 ? 1.08 : stageIndex <= 8 ? 1.1 : 1.12;
     /* toolbar rides across the galaxy band's edges take the reality bend too */
     const canWarp = this.cosmicStage === 'web' && this.galaxyWarp === null && this.kamuiFlight === null
       && this.portal.phase === 'idle' && !this.bootIntro;
     if (this.galaxyInnerFocus && stageIndex >= 7) return; /* inside an isolated system — the origin-based ladder does not apply */
     if (canWarp && stageIndex === 6) {
-      if (this.rig.tZoomT >= 0.70) { this.beginGalaxyWarp('arrive', dial, null); this.prevDialTarget = dial; return; }
-      if (this.rig.tZoomT <= 0.585) { this.beginGalaxyWarp('ascend', dial, this.galaxyFocusId, false); this.prevDialTarget = dial; return; }
+      if (this.rig.tZoomT >= GALAXY_BAND_UPPER) { this.beginGalaxyWarp('arrive', dial, null); this.prevDialTarget = dial; return; }
+      if (this.rig.tZoomT <= GALAXY_DESCEND_CROSS) { this.beginGalaxyWarp('ascend', dial, this.galaxyFocusId, false); this.prevDialTarget = dial; return; }
     }
-    if (canWarp && stageIndex >= 7 && this.rig.tZoomT >= 0.60 && this.rig.tZoomT <= 0.70) {
+    if (canWarp && stageIndex >= 7 && this.rig.tZoomT >= GALAXY_ASCEND_ENTER && this.rig.tZoomT <= GALAXY_BAND_UPPER) {
       this.beginGalaxyWarp('descend', dial, null);
       this.prevDialTarget = dial;
       return;
@@ -4380,17 +4366,19 @@ void main(){
 
     /* Planet/Vault Kamui is a staged field, not an instant overlay. Each
        state has its own timing so disturbance, deformation, vortex, collapse,
-       opening, and traversal remain causally connected. */
-    const advancePortal = (duration: number, next: typeof this.portal.phase) => {
+       opening, and traversal remain causally connected. The linear chain's
+       timings live in systems/portalPhases.ts; hold/out stay bespoke. */
+    const advancePortal = (duration: number, next: PortalPhase) => {
       this.portal.t = Math.min(1, this.portal.t + dt / duration);
       if (this.portal.t >= 1) { this.portal.t = 0; this.portal.phase = next; }
     };
-    if (this.portal.phase === 'arming') advancePortal(this.reducedMotion ? 0.08 : 0.18, 'disturbance');
-    else if (this.portal.phase === 'disturbance') advancePortal(this.reducedMotion ? 0.12 : 0.42, 'deformation');
-    else if (this.portal.phase === 'deformation') advancePortal(this.reducedMotion ? 0.18 : 0.72, 'vortex');
-    else if (this.portal.phase === 'vortex') advancePortal(this.reducedMotion ? 0.22 : 1.0, 'collapse');
-    else if (this.portal.phase === 'collapse') advancePortal(this.reducedMotion ? 0.18 : 0.72, 'opening');
-    else if (this.portal.phase === 'opening') {
+    const chainStep = portalTransitionFor(this.portal.phase);
+    if (chainStep) {
+      advancePortal(
+        this.reducedMotion ? chainStep.reduced : chainStep.duration,
+        chainStep.next,
+      );
+    } else if (this.portal.phase === 'opening') {
       advancePortal(this.reducedMotion ? 0.15 : (this.portalProfile === 'vault' ? 0.72 : 0.9), 'hold');
       if (!this.portal.fired && this.portal.t > 0.72) {
         this.portal.fired = true;
@@ -4437,13 +4425,9 @@ void main(){
       }
     }
     const phaseProgress = this.portal.t * this.portal.t * (3 - 2 * this.portal.t);
-    const phaseWeight: Record<typeof this.portal.phase, number> = {
-      idle: 0, arming: 0.02, disturbance: 0.10, deformation: 0.30,
-      vortex: 0.62, collapse: 0.82, opening: 1, hold: 1, out: 1,
-    };
     let ease = this.portal.phase === 'out'
       ? phaseProgress
-      : Math.min(1, (phaseWeight[this.portal.phase] ?? 0) + phaseProgress * 0.22);
+      : Math.min(1, (PORTAL_PHASE_WEIGHTS[this.portal.phase] ?? 0) + phaseProgress * 0.22);
     /* REVERSE KAMUI — the close of a diary/vault replays the jutsu backward:
        RE-FORM (the vortex snaps back to strength, swirl unwinding the opposite
        way) → EJECT (white-hole release: matter is pushed back out, FOV pulse)
@@ -4626,10 +4610,10 @@ void main(){
       this.bootIntro = false;
     } else {
       /* stage edges — the dial can never cross between the stages */
-      if (this.cosmicStage === 'web' && this.rig.tZoomT > 0.865) this.rig.setZoomTarget(0.865);
+      if (this.cosmicStage === 'web' && this.rig.tZoomT > WEB_CEILING) this.rig.setZoomTarget(WEB_CEILING);
       /* the web's edge — pulling beyond it is what tears reality open */
       if (
-        this.cosmicStage === 'web' && this.rig.tZoomT >= 0.855 && this.rig.zoomVelocity > 0.05
+        this.cosmicStage === 'web' && this.rig.tZoomT >= WEB_EDGE_TRIGGER && this.rig.zoomVelocity > WARP_ZOOM_VEL
         && this.grabCooldown <= 0 && !this.dragging && this.portal.phase === 'idle'
         && !this.focusId && !this.coreActive && this.activeReality
       ) {
@@ -4642,15 +4626,15 @@ void main(){
         this.grabCooldown = 1.2;
       }
       if (this.cosmicStage === 'multiverse') {
-        if (this.realityFocused && this.rig.tZoomT < 0.787) this.rig.setZoomTarget(0.787);
+        if (this.realityFocused && this.rig.tZoomT < REALITY_FLOOR) this.rig.setZoomTarget(REALITY_FLOOR);
         if (this.realityFocused && this.rig.atFocusMax && this.rig.zoomTrend > 0) {
           this.realityFocused = false;
           this.grabCooldown = 0.6;
         }
-        if (this.rig.tZoomT < 0.8) this.rig.setZoomTarget(0.8);
+        if (this.rig.tZoomT < MULTIVERSE_FLOOR_CLAMP) this.rig.setZoomTarget(MULTIVERSE_FLOOR_CLAMP);
         /* the return tear — pushed through the multiverse's floor */
         if (
-          this.rig.tZoomT <= 0.802 && this.rig.zoomVelocity < -0.05 && this.grabCooldown <= 0
+          this.rig.tZoomT <= MULTIVERSE_FLOOR_RETURN && this.rig.zoomVelocity < RETURN_ZOOM_VEL && this.grabCooldown <= 0
           && !this.dragging && this.portal.phase === 'idle'
         ) {
           this.realityFocused = false;
@@ -4671,8 +4655,8 @@ void main(){
           this.grabCooldown = 0.35;
         } else if (this.galaxyInnerFocus) {
           this.galaxyInnerFocus = false;
-          this.rig.setZoomTarget(0.668); /* back in front of that galaxy */
-          this.prevDialTarget = 0.668;
+          this.rig.setZoomTarget(GALAXY_DIAL); /* back in front of that galaxy */
+          this.prevDialTarget = GALAXY_DIAL;
           this.grabCooldown = 0.6;
         } else {
           this.galaxyFocusId = null;
@@ -4694,13 +4678,13 @@ void main(){
       const dialPrev = this.prevDialTarget;
       const warpFree = this.galaxyWarp === null && this.kamuiFlight === null
         && this.portal.phase === 'idle' && !this.dragging && !this.bootIntro;
-      const arriveCross = dialPrev >= 0.70 && dialNow < 0.695 && dialNow >= 0.58;
-      const downCross = dialPrev >= 0.60 && dialPrev <= 0.70 && dialNow < 0.585;
-      const upCross = dialPrev <= 0.585 && dialNow > 0.605;
+      const arriveCross = dialPrev >= GALAXY_BAND_UPPER && dialNow < GALAXY_ARRIVE_CROSS && dialNow >= GALAXY_BAND_LOWER;
+      const downCross = dialPrev >= GALAXY_ASCEND_ENTER && dialPrev <= GALAXY_BAND_UPPER && dialNow < GALAXY_DESCEND_CROSS;
+      const upCross = dialPrev <= GALAXY_DESCEND_CROSS && dialNow > GALAXY_ASCEND_CROSS;
       const canFire = warpFree && this.grabCooldown <= 0 && this.cosmicStage === 'web';
       if (canFire) {
         if (arriveCross) {
-          this.beginGalaxyWarp('arrive', 0.668, null);
+          this.beginGalaxyWarp('arrive', GALAXY_DIAL, null);
         } else if (downCross) {
           /* a dive through the band WITHOUT clicking a specific galaxy
              always folds down into the HOME galaxy's anchor system */
@@ -4716,13 +4700,13 @@ void main(){
       }
       /* resolve a latched crossing */
       if (this.bandLatch) {
-        if (this.clockT - this.bandLatch.at > 3) {
+        if (this.clockT - this.bandLatch.at > BAND_LATCH_TTL) {
           this.bandLatch = null; /* stale */
         } else if (warpFree && this.grabCooldown <= 0 && this.cosmicStage === 'web') {
-          if (this.bandLatch.dir === 'arrive' && dialNow < 0.695 && dialNow >= 0.58) {
-            this.beginGalaxyWarp('arrive', 0.668, null);
+          if (this.bandLatch.dir === 'arrive' && dialNow < GALAXY_ARRIVE_CROSS && dialNow >= GALAXY_BAND_LOWER) {
+            this.beginGalaxyWarp('arrive', GALAXY_DIAL, null);
             this.bandLatch = null;
-          } else if (this.bandLatch.dir === 'up' && dialNow > 0.60 && dialNow < 0.695) {
+          } else if (this.bandLatch.dir === 'up' && dialNow > GALAXY_ASCEND_ENTER && dialNow < GALAXY_ARRIVE_CROSS) {
             this.fireAscend();
             this.bandLatch = null;
           } else if (this.bandLatch.dir === 'down' && dialNow < 0.585) {
@@ -5489,10 +5473,10 @@ void main(){
         label = fb ? `APPROACH · ${fb.data.name.toUpperCase()}` : 'STELLAR SYSTEM';
       }
     }
-    else if (d < 1200) label = 'STAR-FORMING REGION';
-    else if (d < 4500) label = 'SPIRAL ARM';
-    else if (d < 14000) label = 'GALACTIC REGION';
-    else if (d < 38000) {
+    else if (d < SCALE_BANDS.starForming) label = 'STAR-FORMING REGION';
+    else if (d < SCALE_BANDS.spiralArm) label = 'SPIRAL ARM';
+    else if (d < SCALE_BANDS.galacticRegion) label = 'GALACTIC REGION';
+    else if (d < SCALE_BANDS.galaxyName) {
       /* the nearest staged major galaxy rides the label — pan between them
          and the name follows, so you always know whose disc you're crossing */
       let nearName: string | null = this.activeGalaxyName;
@@ -5504,12 +5488,10 @@ void main(){
       }
       label = nearName ? `GALAXY · ${nearName.toUpperCase()}` : 'GALAXY';
     }
-    else if (d < 85000) label = 'GALAXY CLUSTER / GALAXY GROUP';
-    else if (d < 160000) label = 'SUPERCLUSTER';
-    else if (d < 320000) label = 'SUPERCLUSTER COMPLEX';
-    else if (d < 650000) label = 'COSMIC WEB';
-    else if (d < 1200000) label = 'REALITY / UNIVERSE';
-    else label = 'MULTIVERSE';
+    else {
+      const high = highScaleLabel(d);
+      if (high) label = high;
+    }
     if (label !== this.lastLabel) {
       this.lastLabel = label;
       this.cb.onScaleLabel(label);

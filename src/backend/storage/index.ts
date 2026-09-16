@@ -10,4 +10,3 @@ export * from './procedural';
 export * from './seeds';
 export * from './efs';
 export * from './zip';
-export * from './executors';

@@ -2,6 +2,7 @@ import React, { memo, useEffect, useRef, useState, useCallback } from 'react';
 import type { Attachment } from '../types';
 import { sfxTick } from '../audio';
 import { toast } from './toast';
+import { synthBars } from './lib';
 import { getLocalPayload } from '../backend';
 import {
   Play,
@@ -88,22 +89,6 @@ function useAttachmentSource(att: Attachment): string {
   return source;
 }
 
-function synthBars(seedStr: string, n: number): number[] {
-  let h = 2166136261;
-  for (let i = 0; i < seedStr.length; i++) {
-    h ^= seedStr.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) {
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    const v = ((h >>> 0) % 1000) / 1000;
-    const env = Math.sin((i / n) * Math.PI) * 0.7 + 0.3;
-    out.push(Math.max(0.15, v * env));
-  }
-  return out;
-}
-
 /* =========================================================================
    AUDIO PLAYER PLATE — Holographic Cosmic Audio Console
    ========================================================================= */
@@ -127,7 +112,7 @@ export const AudioPlate = memo(function AudioPlate({
   const [eqPreset, setEqPreset] = useState<'Cosmic' | 'Vocal' | 'Bass' | 'Flat'>('Cosmic');
   const [hoverFrac, setHoverFrac] = useState<number | null>(null);
 
-  const peaks = att.peaks && att.peaks.length ? att.peaks : synthBars(att.name + att.id, 48);
+  const peaks = att.peaks && att.peaks.length ? att.peaks : synthBars(att.name + att.id, 48, 0.15);
 
   useEffect(() => {
     const audio = audioRef.current;
