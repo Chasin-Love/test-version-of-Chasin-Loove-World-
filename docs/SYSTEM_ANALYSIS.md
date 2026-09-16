@@ -38,13 +38,13 @@ Tailwind v4 + Three.js r185) that turns a personal life into a living 3D cosmos:
 - Navigation spans **11 hierarchy stages** (multiverse → cosmic web → superclusters →
   clusters → galaxies → stellar system → planet → diary → vault), bridged by four distinct
   **Kamui traversal** effects.
-- **8 canonical realities** ship in `src/realities/bin/` (collected via `import.meta.glob`),
+- **8 canonical realities** live in `src/realities/` as first-class modules (collected via `import.meta.glob`),
   plus user-created realities persisted in localStorage and mirrored to disk by a Node server.
 
 **Entry chain:** `index.html` → `src/main.tsx` → `src/App.tsx` (mode coordinator) →
 lazy `import('./engine/engine')`.
 
-**Run modes:** `npm run dev` (tsx server.ts → Express + Vite middleware on :3000),
+**Run modes:** `npm run dev` (tsx server/index.ts → Express + Vite middleware on :3000),
 `npm run build` (vite build + esbuild server bundle), `npm run typecheck` (tsc --noEmit).
 
 ---
@@ -283,7 +283,9 @@ URL / inline) gated by lock authorization.
 
 ## 7. Server Sector (Express + Reality Daemon)
 
-**`server.ts`** (root, ~337 lines, Express 5, port 3000, binds 0.0.0.0):
+**`server/index.ts`** (in `server/`, Express 5, port 3000, binds 0.0.0.0; the September
+cleanup consolidated the root `server.ts` + `src/server/` into one `server/` module and
+extracted the shared generators into `server/realityTemplates.ts`):
 - Starts `realityDaemon.start(3000)`.
 - GET: `/api/health`, `/api/realities/daemon-status`, `/api/realities/folders`,
   `/api/realities/bin`.
@@ -346,7 +348,7 @@ containment asserts (see debt #3) — fixed in Foundation wave.
 
 ### 9.1 Registry & assembly (`src/realities/index.ts`)
 - `import.meta.glob('./*/index.ts', { eager: true })` auto-discovers every immediate
-  subfolder; `bin/` skipped. Accepts single exports or arrays (`bin/parallels` exports
+  subfolder; `bin/` skipped. Accepts single exports or arrays (`realities/parallels` exports
   `parallelRealities`).
 - `buildRealityConfig` (`:46`): golden-spiral bubble position, normalizes first body to the
   `anchor` star, **guarantees exactly one `vault` black hole** (auto-creates), applies
@@ -359,7 +361,7 @@ containment asserts (see debt #3) — fixed in Foundation wave.
 ### 9.2 Reality definition schema
 `RealityConfig` (`realities/types.ts:16-34`): `id, name, codeName, spectral, description,
 bubblePos, bubbleSize, colorA, colorB, starColor, bodies: CosmicBody[], entries: DiaryEntry[],
-clusters?, galaxies?, homeLineage?`. A `bin/<name>/index.ts` exports one themed config
+clusters?, galaxies?, homeLineage?`. A `realities/<name>/index.ts` exports one themed config
 (palette + 3-10 bodies + seed entries); `surface.ts` exports a `UniverseSurfaceConfig` — but
 the surface is keyed by realityId string in `surfacePresets.ts` (**second, manual registration
 point**; silent fallback when missed).
@@ -375,8 +377,11 @@ point**; silent fallback when missed).
 ### 9.4 Folder semantics
 - `solPrime/` — home reality, protected from deletion.
 - `bin/` — Quantum Bin (deleted realities preserved for restore); excluded from collection.
+  (September cleanup: the 8 authored realities and `parallels/` were promoted OUT of
+  `bin/` — the glob never collected them there, so only Sol Prime was live — and
+  the incomplete `test/` folder was deleted. `bin/` is now a true empty recycle bin.)
 - `test/` — committed dev junk (incomplete: missing `surface.ts`, breaks typecheck) that ships
-  in the live multiverse. Moved to `bin/` in the Foundation wave.
+  in the live multiverse. Deleted entirely in the cleanup wave (not restored to bin).
 
 ### 9.5 Scale navigation (3 duplicated definitions — drift risk)
 1. `MultiverseBar.hierarchyStages` (`:60-72`),
@@ -410,7 +415,7 @@ Severity: 🔴 high · 🟠 medium · 🟡 low. (✓ = addressed in Foundation w
 | --- | --- | --- | --- |
 | 1 | 🔴 | **engine.ts god class** (5,714 lines): stage builders + 4 Kamui systems + portal FSM + surface landing + picking in one class | `engine.ts` |
 | 2 | 🔴 | **Duplicate executor implementation** (~95% identical, drift risk) | `backend/storage/executors.ts` vs `backend/executors/index.ts` |
-| 3 | 🔴 | **Path traversal / uncontained fs writes**: request-body folder names reach `path.join`/`fs.rmSync` unfiltered | `server.ts:128-300`, `realityDaemon.ts:140-159` ✓ |
+| 3 | 🔴 | **Path traversal / uncontained fs writes**: request-body folder names reach `path.join`/`fs.rmSync` unfiltered | `server/index.ts`, `server/realityDaemon.ts` ✓ |
 | 4 | 🟠 | **localStorage is the whole DB** (5 MB cap); quota errors swallowed silently; 24 full-tree shadows scale O(shadows × tree) into one key | `state.ts:252-273, 245` |
 | 5 | 🟠 | **O(n) EFS tree ops**: `efsNodeOf` and `efsChildren` scan the whole node table per call | `efs.ts:67-105` |
 | 6 | 🟠 | **`primeState` falsifies data** — back-dates newest diary entry `updatedAt` to fake streaks | `state.ts:99-110` ✓ |

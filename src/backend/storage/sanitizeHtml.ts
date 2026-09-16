@@ -1,3 +1,10 @@
+/**
+ * Diary HTML Sanitizer — strict allowlist sanitizer for user-authored rich text.
+ * DOMParser-based: strips scripts, iframes, embedded objects and event handlers,
+ * and permits only http/https/mailto link protocols. XSS can never ride into
+ * the diary on a saved entry.
+ */
+
 const ALLOWED_TAGS = new Set([
   'a',
   'b',

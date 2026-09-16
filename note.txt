@@ -1,0 +1,13 @@
+| Folder | What it is | Can you touch it? |
+| --- | --- | --- |
+| .git | Git's database — your entire version history. | Never edit. |
+| .github | CI recipe — builds your Windows/Linux installers on every push. | Edit when changing builds. |
+| .zcode | Local AI-tooling session data (leftover plans). Untracked from git now. | Safe to delete. |
+| dist | Compiled output of npm run build. It reappeared because we built — it's not source. | Regenerable, safe to delete. |
+| docs | SYSTEM_ANALYSIS.md — the full architecture record of your project. | Read/reference. |
+| node_modules | Installed npm dependencies. | Regenerable (npm install). |
+| public | Static assets served as-is: the vendored Python runtime (pyodide/) and fonts (fonts/). | Keep — this is your offline capability. |
+| scripts | Helper tooling: Windows toolchain installer, icon generator, WASM build script. | Occasionally. |
+| server | The Node side: dev server, reality folder API, disk daemon. Desktop replaces it natively. | Source — editable. |
+| src | The app itself: React UI, the 3D engine, physics, realities, encrypted vault, everything you see on screen. | Source — editable. |
+| src-tauri | The desktop shell: Rust commands, app config, icons — and where the C++ core gets compiled into the binary. | Source — editable. |

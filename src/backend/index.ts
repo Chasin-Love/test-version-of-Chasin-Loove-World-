@@ -1,12 +1,13 @@
 /**
  * MY UNIVERSE — CORE BACKEND ARCHITECTURE
- * 
- * Central gateway providing the enterprise-grade backend infrastructure:
- *  1. Virtual Filesystem (EFS) — Copy-on-write inodes, snapshots, SHA-256 scrubbing
- *  2. Dual-Tier Persistence — Native OPFS high-speed streams with IndexedDB fallback
+ *
+ * The single facade over the sovereign backend. Everything outside `backend/`
+ * imports from here — never from a deep path:
+ *  1. Virtual Filesystem (EFS) — copy-on-write inodes, snapshots, SHA-256 scrubbing
+ *  2. Triple-Tier Persistence — Desktop FS (Tauri) → OPFS → IndexedDB
  *  3. Cryptographic Armor — PBKDF2 key derivation & AES-GCM 256-bit encryption
- *  4. Universal Execution Engine — ISO 9660 disc images, Web Apps, Pyodide, Workers
- *  5. Planetary Diary Linkage — Mapping cosmological worlds to living diaries
+ *  4. Universal Execution Engine — ISO 9660, Web Apps, Pyodide, Workers, ZIP
+ *  5. Domain Contracts — types, runner kinds, backend status
  */
 
 // Master types
@@ -26,9 +27,6 @@ export * from './storage/seeds';
 // Universal Execution Engine
 export * from './executors';
 export * from './executors/isoExecutor';
-
-// Planetary Diary Linkage Engine
-export * from './diary';
 
 import { hasOpfs, hasIdb } from './storage/indexedDB';
 import type { BackendStatus } from './types';

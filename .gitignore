@@ -3,6 +3,10 @@ dist/
 build/
 .vite/
 
+# Desktop (Tauri) build artifacts
+src-tauri/target/
+src-tauri/gen/schemas/
+
 # Dependencies
 node_modules/
 bun.lock
@@ -17,6 +21,7 @@ bun.lock
 *.env.*
 
 # Editors & IDEs
+.zcode/
 .vscode/
 .idea/
 zed/

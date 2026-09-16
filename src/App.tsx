@@ -8,18 +8,18 @@ import { PhysicsHUD } from './ui/PhysicsHUD';
 import { ErrorBoundary, IcLink, ToastHost, useUniverse } from './ui/bits';
 import { toast } from './ui/toast';
 import { perfMark } from './performance';
-import { MultiverseBar } from './components/MultiverseBar';
-import { RealityHoverCard } from './components/RealityHoverCard';
-import { ClusterHoverCard } from './components/ClusterHoverCard';
+import { MultiverseBar } from './components/hud/MultiverseBar';
+import { RealityHoverCard } from './components/hud/RealityHoverCard';
+import { ClusterHoverCard } from './components/hud/ClusterHoverCard';
 
-import { CosmicWebHUD, type CosmicWebSettings } from './components/CosmicWebHUD';
+import { CosmicWebHUD, type CosmicWebSettings } from './components/hud/CosmicWebHUD';
 const DiaryWindow = lazy(() => import('./ui/DiaryWindow'));
 const CoreMode = lazy(() => import('./ui/CoreMode'));
 const VaultUI = lazy(() => import('./ui/VaultUI'));
-const CosmicLineageModal = lazy(() => import('./components/CosmicLineageModal').then((module) => ({ default: module.CosmicLineageModal })));
-const CoreConsole = lazy(() => import('./components/CoreConsole').then((module) => ({ default: module.CoreConsole })));
-const RealityAdvancedModal = lazy(() => import('./components/RealityAdvancedModal').then((module) => ({ default: module.RealityAdvancedModal })));
-import { GalaxyHoverCard } from './components/GalaxyHoverCard';
+const CosmicLineageModal = lazy(() => import('./components/lineage/CosmicLineageModal').then((module) => ({ default: module.CosmicLineageModal })));
+const CoreConsole = lazy(() => import('./components/console/CoreConsole').then((module) => ({ default: module.CoreConsole })));
+const RealityAdvancedModal = lazy(() => import('./components/realities/RealityAdvancedModal').then((module) => ({ default: module.RealityAdvancedModal })));
+import { GalaxyHoverCard } from './components/hud/GalaxyHoverCard';
 import { getReality, type RealityConfig, type GalaxyClusterData, type GalaxyData } from './realities';
 
 interface Win { key: string; planetId: string; rect: WinRect; minimized: boolean; maximized?: boolean }

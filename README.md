@@ -105,11 +105,22 @@ In standard personal computing, files, notes, and records are treated as static 
 ## 3. GLOBAL PROJECT & SUBSYSTEM TOPOLOGY
 
 ```
-├── index.html                  # HTML entry point, Google Fonts, root div#root
-├── package.json                # Project dependencies, scripts (dev, build, lint)
+├── index.html                  # HTML entry point, vendored fonts, root div#root
+├── package.json                # Project dependencies, scripts (dev, build, desktop:*)
 ├── vite.config.js              # Vite configuration with Tailwind CSS v4 plugin
-├── tsconfig.json               # TypeScript strict configuration
-├── metadata.json               # Platform capabilities & frame permissions
+├── tsconfig.json               # TypeScript strict configuration (src + server)
+│
+├── server/                     # Node-side code (dev host + reality disk mirror)
+│   ├── index.ts                # Express 5 entry: Vite middleware, reality disk API
+│   ├── realityDaemon.ts        # 3s scan & auto-repair, Quantum Bin disk ops
+│   ├── realityTemplates.ts     # Shared generators for reality/surface modules
+│   └── paths.ts                # Folder-name sanitize + containment asserts
+│
+├── src-tauri/                  # Desktop shell (Tauri 2, Linux + Windows)
+│   └── src/                    # Rust commands: cosmos C++ FFI, storage, realities
+│
+├── public/                     # Vendored offline assets (pyodide/, fonts/)
+├── scripts/                    # Toolchain + icon + wasm build helpers
 │
 └── src/
     ├── main.tsx                # React 18 bootstrap mounting <App />
@@ -136,16 +147,16 @@ In standard personal computing, files, notes, and records are treated as static 
     │   ├── executors/          # Universal Virtual Runtimes
     │   │   ├── index.ts        # Runner detection, WebApp blob bundler & JS worker
     │   │   └── isoExecutor.ts  # ISO 9660 binary sector parser & virtual mount
-    │   └── diary/              # Planetary Diary Linkage
-    │       └── index.ts        # Maps celestial body UUIDs to chronological pages
     │
     ├── engine/                 # WebGL 3D Cosmos Engine
-    │   ├── index.ts            # Engine barrel exports
     │   ├── engine.ts           # Three.js scene graph, render loop, picking, LOD
     │   ├── cameraRig.ts        # 10-scale logarithmic camera controller & drag inertia
-    │   ├── kamui.ts            # Kamui dimensional wormhole traversal shaders
     │   ├── blackhole.ts        # Gargantua-class composite black hole & lensed arcs
+    │   ├── blackholeRaymarch.ts# Cinematic raymarched lensing overlay (quality-gated)
+    │   ├── capability.ts       # GPU probe & render quality tiers
+    │   ├── math.ts             # Shared engine math + glow texture helpers
     │   ├── shaders.ts          # Master GLSL library (Star, Planet, Atmosphere, Web)
+    │   ├── systems/            # Extracted engine systems (thresholds, portal, levels)
     │   └── surface/            # Universe Surface (Cosmic Background Canvas Subsystem)
     │       ├── index.ts        # Surface module barrel export
     │       ├── types.ts        # UniverseSurfaceConfig & UniverseSurfaceUpdateParams
@@ -154,19 +165,23 @@ In standard personal computing, files, notes, and records are treated as static 
     │       └── UniverseSurfaceManager.ts # Autonomous manager for dome, stars, nebulae & neighbors
     │
     ├── physics/                # Celestial Mechanics & Astrophysics
-    │   ├── index.ts            # Physics barrel export
     │   └── physicsEngine.ts    # Kepler orbits, Vis-Viva, Stefan-Boltzmann, Roche limits
     │
     ├── realities/              # Multiverse Realities & Hierarchy
-    │   ├── index.ts            # Reality roster & Golden Spiral orbital distributions
+    │   ├── index.ts            # Reality registry & Golden Spiral orbital distributions
     │   ├── types.ts            # RealityConfig, cosmological metadata & color matrices
     │   ├── hierarchyTypes.ts   # 10 cosmological stages data models
+    │   ├── hierarchyStages.ts  # Single source for stage labels, dials & descriptions
     │   ├── clusterGenerator.ts # Galaxy cluster distribution algorithms
     │   ├── galaxyGenerator.ts  # Galactic spiral arm generator
-    │   └── parallels/          # Authored canonical realities (Sol Prime, Chronos, etc.)
+    │   ├── solPrime/           # The home reality (protected baseline)
+    │   ├── biolumePrimordial/ … vesperaTwilight/  # Canonical parallel realities
+    │   └── bin/                # Quantum Bin: deleted realities awaiting restore/purge
+    │
+    ├── desktop/                # Desktop adapter — single seam between web & Tauri
+    │   └── adapter.ts          # State/payload/reality calls: native or fetch
     │
     ├── ui/                     # Interactive Surfaces, Windows & Overlays
-    │   ├── index.ts            # UI barrel export
     │   ├── VaultUI.tsx         # Eventide Black Hole Vault & Universal Executor
     │   ├── FileManager.tsx     # EFS Tree Explorer, breadcrumbs, CoW shadow controls
     │   ├── DiaryWindow.tsx     # Living Planetary Diary (rich text, voice, media)
@@ -176,14 +191,15 @@ In standard personal computing, files, notes, and records are treated as static 
     │   ├── PhysicsHUD.tsx      # Real-time astrophysics telemetry dashboard
     │   ├── VaultBits.tsx       # Hex viewer, kind glyphs & file preview tiles
     │   ├── bits.tsx            # Shared UI primitives, buttons, badges, error boundary
+    │   ├── lib.ts              # Shared UI helpers (synthBars, readAsDataURL)
     │   ├── toast.ts            # HUD toast notification dispatch
     │   └── exportDiary.ts      # Diary export engine (PDF, Markdown, HTML, JSON)
     │
     └── components/             # Multiverse HUD & Cosmic Inspectors
-        ├── MultiverseBar.tsx   # Top-level reality switcher & scale breadcrumbs
-        ├── CosmicWebHUD.tsx    # Filament density & redshift telemetry
-        ├── GalaxyRoster.tsx    # Galactic hierarchy editor
-        └── *HoverCard.tsx      # Interactive telemetry hover cards
+        ├── console/            # Core Console, Quantum Bin tab, native engine card
+        ├── hud/                # MultiverseBar, CosmicWebHUD, hover cards, GalaxyRoster
+        ├── lineage/            # CosmicLineageModal & ThinkingCloudTooltip
+        └── realities/          # Create/Edit reality modals & advanced panels
 ```
 
 ---
