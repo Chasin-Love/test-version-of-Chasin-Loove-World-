@@ -36,6 +36,7 @@ import {
   efsScrub, efsSubtreeIds, efsHeal, efsUniqueName, EFS_ROOT, migrateLegacyVault,
 } from './backend';
 import { recordPersistence } from './performance';
+import { desktopStore, realityApi } from './desktop/adapter';
 import type { EfsScrubReport, VaultFile, VfsNode, VfsShadow } from './types';
 
 
@@ -254,6 +255,9 @@ function persistState() {
         }),
       };
       const serialized = JSON.stringify(slim);
+      /* Desktop tier: real file in the OS app-data dir (no 5MB quota). The
+         localStorage write still runs as a fast cache + web fallback. */
+      void desktopStore.writeState(serialized);
       localStorage.setItem(STORAGE_KEY, serialized);
       recordPersistence(serialized.length);
     } catch {
@@ -283,6 +287,36 @@ export function subscribe(fn: () => void): () => void {
 
 export function useUniverse(): UniverseState {
   return useSyncExternalStore(subscribe, getState, getState);
+}
+
+/**
+ * Desktop boot hydrate. The desktop shell stores the universe in a real file;
+ * the webview localStorage acts as a synchronous boot cache. On boot:
+ *   - file missing → push the current cache to disk (first desktop boot)
+ *   - file differs from cache → adopt the file (authoritative) and reload once
+ * Content-equality (not string equality) guards against reload loops.
+ */
+export async function hydrateDesktopSnapshot(): Promise<void> {
+  const w = window as unknown as { __TAURI_INTERNALS__?: unknown };
+  if (!w.__TAURI_INTERNALS__) return;
+  try {
+    const fileJson = await desktopStore.readState();
+    if (fileJson === null) {
+      const local = localStorage.getItem(STORAGE_KEY);
+      if (local) void desktopStore.writeState(local);
+      return;
+    }
+    const local = localStorage.getItem(STORAGE_KEY);
+    const canon = (s: string | null): string => {
+      try { return JSON.stringify(JSON.parse(s ?? 'null')); } catch { return s ?? ''; }
+    };
+    if (canon(fileJson) !== canon(local)) {
+      localStorage.setItem(STORAGE_KEY, fileJson);
+      window.location.reload();
+    }
+  } catch (err) {
+    console.warn('[desktop] hydrate failed:', err);
+  }
 }
 
 function audit(msg: string) {
@@ -406,11 +440,7 @@ export const actions = {
     actions.updateRealityMeta(realityId, { name: cleanName });
 
     // Synchronize folder renaming to backend disk
-    void fetch('/api/realities/rename-folder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ realityId, newName: cleanName }),
-    }).catch((err) => console.warn('[State] Backend rename folder sync error:', err));
+    void realityApi('/api/realities/rename-folder', { realityId, newName: cleanName });
   },
 
   createReality(newReality: RealityConfig) {
@@ -428,11 +458,7 @@ export const actions = {
     notify();
 
     // Synchronize to backend disk folder in real time
-    void fetch('/api/realities/create-folder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newReality),
-    }).catch((err) => console.warn('[State] Backend create folder sync error:', err));
+    void realityApi('/api/realities/create-folder', newReality);
   },
 
   deleteReality(realityId: string) {
@@ -495,11 +521,7 @@ export const actions = {
     notify();
 
     // Synchronize disk transfer to src/realities/bin/
-    void fetch('/api/realities/bin/move-to-bin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ realityId, folderName: doomedReality?.name }),
-    }).catch((err) => console.warn('[State] Backend bin move sync error:', err));
+    void realityApi('/api/realities/bin/move-to-bin', { realityId, folderName: doomedReality?.name });
   },
 
   restoreReality(realityId: string) {
@@ -526,11 +548,7 @@ export const actions = {
     notify();
 
     // Synchronize restore on disk
-    void fetch('/api/realities/bin/restore', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ realityId }),
-    }).catch((err) => console.warn('[State] Backend restore sync error:', err));
+    void realityApi('/api/realities/bin/restore', { realityId });
   },
 
   purgeRealityFromBin(realityId: string) {
@@ -541,11 +559,7 @@ export const actions = {
     notify();
 
     // Permanently wipe on disk
-    void fetch('/api/realities/bin/purge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ realityId }),
-    }).catch((err) => console.warn('[State] Backend purge sync error:', err));
+    void realityApi('/api/realities/bin/purge', { realityId });
   },
 
   emptyRealityBin() {
@@ -556,9 +570,7 @@ export const actions = {
     notify();
 
     // Empty bin on disk
-    void fetch('/api/realities/bin/empty', {
-      method: 'POST',
-    }).catch((err) => console.warn('[State] Backend empty bin sync error:', err));
+    void realityApi('/api/realities/bin/empty', {});
   },
 
   /* -------------------- Major Galaxies of a Reality ---------------------- */

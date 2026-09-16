@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Trash2, RefreshCw, RotateCcw, AlertTriangle, ShieldCheck, Activity, Folder, Sparkles, CheckCircle2, Clock, Globe } from 'lucide-react';
 import { actions, useUniverse } from '../state';
+import { realityApi } from '../desktop/adapter';
 import { toast } from '../ui/toast';
 import { TrashedReality } from '../types';
 
@@ -25,8 +26,8 @@ export const QuantumBinTab: React.FC = () => {
     try {
       setIsLoading(true);
       const [daemonRes, binRes] = await Promise.all([
-        fetch('/api/realities/daemon-status').then((r) => r.json()).catch(() => null),
-        fetch('/api/realities/bin').then((r) => r.json()).catch(() => null),
+        realityApi<DaemonStatus>('/api/realities/daemon-status', undefined, 'GET'),
+        realityApi<{ bin: { folderName: string; path: string; trashedAt: number }[] }>('/api/realities/bin', undefined, 'GET'),
       ]);
       if (daemonRes) setDaemonStatus(daemonRes);
       if (binRes && binRes.bin) setDiskBin(binRes.bin);

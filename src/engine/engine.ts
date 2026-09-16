@@ -18,12 +18,15 @@ import {
 import { smoothstep, makeGlowTexture } from './math';
 import { UniverseSurfaceManager } from './surface';
 import { createBlackHole, type BlackHoleVisual } from './blackhole';
+import { createRaymarchBlackHole, updateRaymarchUniforms } from './blackholeRaymarch';
+import { canUseRaymarchBlackHole, probeCapability, pixelRatioFor, getQualityTier, QUALITY_CHANGE_EVENT } from './capability';
 import { CameraRig } from './cameraRig';
 import type { CosmicBody } from '../types';
 import { REALITIES, RealityConfig, GalaxyClusterData, GalaxyData } from '../realities';
 import { HIERARCHY_DIALS } from '../realities/hierarchyStages';
 import { generateStellarSystemForGalaxy } from '../realities/galaxyGenerator';
 import { calculateKeplerPosition, calculatePhysics } from '../physics/physicsEngine';
+import { cosmosBridge } from '../native/cpp_bridge';
 import { isPerformanceEnabled, perfMark, perfMeasure, recordFrame } from '../performance';
 import {
   WEB_CEILING, WEB_EDGE_TRIGGER, WARP_ZOOM_VEL,
@@ -128,6 +131,7 @@ interface InnerPlanet {
   group: THREE.Group;
   mat?: THREE.ShaderMaterial;
   blackHole?: BlackHoleVisual;
+  blackHoleRaymarch?: BlackHoleVisual;
   cloudMat?: THREE.ShaderMaterial;
   cloudMesh?: THREE.Mesh;
   atmo?: THREE.Mesh;
@@ -321,6 +325,40 @@ export class UniverseEngine {
      cluster fields and cosmic web keep their designed screen size at their
      own scales instead of collapsing to the 1.5px shader floor. */
   private levelPointMats: THREE.ShaderMaterial[] = [];
+  /* C++ Kepler accelerator — the native core (desktop binary or WASM) batches
+     the per-frame orbit positions; the tick loop reads this cache and falls
+     back to the inline TS solver whenever the cache is stale or absent. */
+  private keplerCache: {
+    simDays: number;
+    xyz: Float64Array;
+    valid: boolean;
+    inflight: boolean;
+  } = { simDays: NaN, xyz: new Float64Array(0), valid: false, inflight: false };
+  private keplerFrame = 0;
+  private keplerEcc = new Map<string, number>();
+  /* cinematic tier: raymarched overlays live here so a shader failure can
+     disarm them all at once (the composite always remains) */
+  private raymarchHoles: BlackHoleVisual[] = [];
+  private raymarchDisabled = false;
+  private onQualityChange: () => void = () => {};
+
+  private attachRaymarchHole(R: number, container: THREE.Object3D): BlackHoleVisual | null {
+    if (this.raymarchDisabled || !canUseRaymarchBlackHole()) return null;
+    try {
+      const overlay = createRaymarchBlackHole(R);
+      container.add(overlay.group);
+      this.raymarchHoles.push(overlay);
+      return overlay;
+    } catch {
+      return null; /* creation failure can never take down the composite */
+    }
+  }
+
+  private disableAllRaymarchHoles(): void {
+    for (const overlay of this.raymarchHoles) {
+      overlay.group.visible = false;
+    }
+  }
   /* Pocket Cosmos Marbles — every reality bubble is a glass universe */
   private realityMarbles: { spiral: THREE.Points; glassMat: THREE.ShaderMaterial; speed: number }[] = [];
   private marbleRingTex: THREE.CanvasTexture | null = null;
@@ -478,9 +516,20 @@ export class UniverseEngine {
     this.originalTouchAction = canvas.style.touchAction;
     const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
     const lowPowerDevice = navigator.hardwareConcurrency <= 4 || (deviceMemory !== undefined && deviceMemory <= 4);
-    const maxPixelRatio = lowPowerDevice ? 1 : 1.35;
+    /* capability probe: cinematic tier (desktop-class GPUs) unlocks pixelRatio
+       up to 2 and the raymarched hole; user override can force any tier */
+    const cap = probeCapability();
+    const maxPixelRatio = lowPowerDevice || cap.tier === 'low' ? 1 : pixelRatioFor(cap.tier, 99);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !lowPowerDevice, powerPreference: lowPowerDevice ? 'default' : 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
+    /* tier changes (settings UI) re-apply the pixel ratio live */
+    this.onQualityChange = () => {
+      const next = pixelRatioFor(getQualityTier(), 99);
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, next));
+      this.composer?.setPixelRatio(Math.min(window.devicePixelRatio, next));
+      if (getQualityTier() !== 'cinematic') this.disableAllRaymarchHoles();
+    };
+    window.addEventListener(QUALITY_CHANGE_EVENT, this.onQualityChange);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -557,6 +606,10 @@ export class UniverseEngine {
                      (fsLog ? `--- FRAGMENT SHADER ---\n${fsSource}` : '');
       console.error('[universe] shader compile failure:', log || 'unknown shader error', '\nSource:\n', source.slice(0, 4000));
       window.dispatchEvent(new CustomEvent('eventide-shader-error', { detail: { source: source.slice(0, 4000), log: log || 'unknown shader error' } }));
+      /* any shader failure permanently disarms the raymarched tier this
+         session — the composite alone keeps the hole alive */
+      this.raymarchDisabled = true;
+      this.disableAllRaymarchHoles();
     };
 
     /* the Vault black hole feeds on activity — store/extract/run events pulse it */
@@ -927,6 +980,10 @@ export class UniverseEngine {
       const R = data.radius;
       const bh = createBlackHole(R);
       g.add(bh.group);
+      /* cinematic overlay: true geodesic lensing above the composite (safe by
+         construction — composite stays underneath and owns the shadow) */
+      const rm = this.attachRaymarchHole(R, g);
+      if (rm) g.userData.bhRaymarch = rm;
 
       /* slim lattice torii kept as the Vault activity pulse feedback */
       const latticeMat = new THREE.MeshStandardMaterial({ color: 0x0c1418, emissive: new THREE.Color('#6fc2b4'), emissiveIntensity: 1.8, metalness: 0.7, roughness: 0.35 });
@@ -2415,6 +2472,7 @@ void main(){
       const p = data.palette;
       const col = (h: string) => new THREE.Color(h);
       const g = new THREE.Group();
+      let ipRaymarch: BlackHoleVisual | null = null;
 
       /* ---- an isolated Eventide Vault keeps the same composite black-hole
              grammar as the home galaxy: horizon, accretion disk, photon ring,
@@ -2423,6 +2481,8 @@ void main(){
       if (data.kind === 'vault') {
         const bh = createBlackHole(data.radius);
         g.add(bh.group);
+        const rm = this.attachRaymarchHole(data.radius, g);
+        if (rm) ipRaymarch = rm;
         const latticeMat = new THREE.MeshStandardMaterial({
           color: 0x0c1418,
           emissive: new THREE.Color('#6fc2b4'),
@@ -2437,7 +2497,7 @@ void main(){
         r2.rotation.y = 0.6;
         g.add(r1, r2);
         g.userData.spin = { r1, r2 };
-        const ip: InnerPlanet = { data, group: g, blackHole: bh, moons: [], hoverT: 0 };
+        const ip: InnerPlanet = { data, group: g, blackHole: bh, blackHoleRaymarch: ipRaymarch ?? undefined, moons: [], hoverT: 0 };
         this.addInnerColliderAndOrbit(ip, root, rnd);
         root.add(g);
         sys.planets.push(ip);
@@ -2768,6 +2828,9 @@ void main(){
            true billboards instead of inheriting that tilt. */
         p.group.getWorldQuaternion(this._qScratch2).invert().multiply(this.camera.quaternion);
         p.blackHole.update(this.clockT, this._qScratch2, portalTear);
+        if (p.blackHoleRaymarch && p.blackHoleRaymarch.group.visible) {
+          updateRaymarchUniforms(p.blackHoleRaymarch, this.camera, this.clockT, portalTear);
+        }
         const spin = p.group.userData.spin as { r1: THREE.Mesh; r2: THREE.Mesh } | undefined;
         if (spin) {
           spin.r1.rotation.z += dt * 0.3;
@@ -4934,12 +4997,29 @@ void main(){
   private updateBodies(dt: number) {
     const sysW = 1 - smoothstep(430, 860, this.currentDist());
 
+    /* C++ accelerator refresh — every other frame, non-blocking. The native
+       core batch-evaluates every orbit; results land one tick later, which is
+       visually seamless. Web without WASM never enters this path. */
+    const accelActive = this.keplerCache.valid && Math.abs(this.keplerCache.simDays - this.simDays) < 0.25;
+    this.keplerFrame++;
+    if (this.keplerFrame % 2 === 0 && !this.keplerCache.inflight) {
+      void this.refreshKeplerCache();
+    }
+
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
       const o = b.data.orbit;
-      const phys = calculatePhysics(b.data, this.simDays);
-      const pos = calculateKeplerPosition(o.a, phys.eccentricity, o.phase, o.incl, this.simDays, o.speed || 0.01);
-      b.group.position.set(pos.x, pos.y, pos.z);
+      let px: number, py: number, pz: number;
+      if (accelActive && this.keplerCache.xyz.length >= (i + 1) * 3) {
+        px = this.keplerCache.xyz[3 * i];
+        py = this.keplerCache.xyz[3 * i + 1];
+        pz = this.keplerCache.xyz[3 * i + 2];
+      } else {
+        const phys = calculatePhysics(b.data, this.simDays);
+        const pos = calculateKeplerPosition(o.a, phys.eccentricity, o.phase, o.incl, this.simDays, o.speed || 0.01);
+        px = pos.x; py = pos.y; pz = pos.z;
+      }
+      b.group.position.set(px, py, pz);
       /* THE BIRTH — during the ejection every world flies outward from the
          single center point in a swirling bend: the orbit unwinds as it
          expands, so the system pours out of the point spinning */
@@ -5059,6 +5139,10 @@ void main(){
         if (bh) {
           bh.update(this.clockT, this.camera.quaternion, portalTear);
         }
+        const rm = b.group.userData.bhRaymarch as BlackHoleVisual | undefined;
+        if (rm && rm.group.visible) {
+          updateRaymarchUniforms(rm, this.camera, this.clockT, portalTear);
+        }
 
         /* feed the void — recent Vault activity (store/extract/run) brightens
            and shudders the lattice rings, then relaxes back to baseline */
@@ -5121,8 +5205,51 @@ void main(){
     }
   }
 
-  private updateLevels(dt = 0) {
-    const d = this.currentDist();
+  /**
+   * Batch-evaluate every orbit through the C++ core (native or WASM). The
+   * arrays mirror this.bodies order; the tick loop only trusts the cache when
+   * its simDays is within a quarter-day of the live sim clock, so a slow IPC
+   * round-trip can never freeze the sky.
+   */
+  private async refreshKeplerCache(): Promise<void> {
+    if (!this.bodies.length) return;
+    const backend = cosmosBridge.getStatus();
+    if (backend.backend === 'typescript') return;
+    this.keplerCache.inflight = true;
+    try {
+      const a: number[] = [];
+      const e: number[] = [];
+      const phase: number[] = [];
+      const incl: number[] = [];
+      const speed: number[] = [];
+      for (const b of this.bodies) {
+        const o = b.data.orbit;
+        a.push(o.a);
+        let ecc = this.keplerEcc.get(b.data.id);
+        if (ecc === undefined) {
+          ecc = calculatePhysics(b.data, 0).eccentricity;
+          this.keplerEcc.set(b.data.id, ecc);
+        }
+        e.push(ecc);
+        phase.push(o.phase);
+        incl.push(o.incl);
+        speed.push(o.speed || 0.01);
+      }
+      const res = await cosmosBridge.keplerBatch({ a, e, phase, incl, speed, simDays: this.simDays });
+      /* bodies may have resynced mid-flight — only accept a matching count */
+      if (res.xyz.length === this.bodies.length * 3) {
+        this.keplerCache.xyz = res.xyz;
+        this.keplerCache.simDays = this.simDays;
+        this.keplerCache.valid = true;
+      }
+    } catch {
+      this.keplerCache.valid = false;
+    } finally {
+      this.keplerCache.inflight = false;
+    }
+  }
+
+  private updateLevels(dt = 0) {    const d = this.currentDist();
     const camLen = this.camera.position.length() + 1;
     const wins = {
       neighborhood: windowFn(d, 260, 750, 4800, 12000),
@@ -5692,5 +5819,6 @@ void main(){
     this.scene.clear();
     this.composer.dispose();
     this.renderer.dispose();
+    window.removeEventListener(QUALITY_CHANGE_EVENT, this.onQualityChange);
   }
 }

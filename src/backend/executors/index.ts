@@ -230,12 +230,21 @@ let __pyodide = null;
 self.onmessage = async (event) => {
   if (!event.data || event.data.type !== 'run') return;
   const base = event.data.base;
+  const cdnBase = event.data.cdnBase;
   try {
     if (!__pyodidePromise) {
-      self.postMessage({ type: 'status', text: 'fetching python runtime (pyodide) · first boot downloads ~10 MB…' });
-      importScripts(base + 'pyodide.js');
+      self.postMessage({ type: 'status', text: 'loading python runtime (pyodide)…' });
+      /* local vendored copy first (offline-first); CDN fallback second */
+      try {
+        importScripts(base + 'pyodide.js');
+      } catch (localErr) {
+        if (!cdnBase) throw localErr;
+        self.postMessage({ type: 'status', text: 'local pyodide missing · fetching from CDN…' });
+        self.__pyodideBase = cdnBase;
+        importScripts(cdnBase + 'pyodide.js');
+      }
       if (typeof self.loadPyodide !== 'function') throw new Error('pyodide loader unavailable');
-      __pyodidePromise = self.loadPyodide({ indexURL: base });
+      __pyodidePromise = self.loadPyodide({ indexURL: self.__pyodideBase || base });
       __pyodide = await __pyodidePromise;
       __pyodide.setStdout({ batched: (s) => self.postMessage({ type: 'log', level: 'info', text: s }) });
       __pyodide.setStderr({ batched: (s) => self.postMessage({ type: 'log', level: 'warn', text: s }) });
@@ -276,7 +285,10 @@ export function runPython(code: string, onLog: LogSink): PythonRunHandle {
   pythonSessionWorker = worker;
   pythonSessionBusy = true;
 
-  const base = `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`;
+  /* Offline-first: prefer the vendored copy in public/pyodide (works with no
+     network, and ships inside the desktop bundle); fall back to the CDN only
+     when the local copy is missing (e.g. a stale cached worker page). */
+  const base = `${document.baseURI}pyodide/`;
   let settled = false;
   let resolveRun!: () => void;
   const promise = new Promise<void>((resolve) => { resolveRun = resolve; });
@@ -300,7 +312,12 @@ export function runPython(code: string, onLog: LogSink): PythonRunHandle {
     onLog(`python worker fault: ${event.message}`, 'error');
     finish(true);
   };
-  worker.postMessage({ type: 'run', code, base });
+  worker.postMessage({
+    type: 'run',
+    code,
+    base,
+    cdnBase: `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`,
+  });
 
   return {
     promise,

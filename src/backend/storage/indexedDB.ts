@@ -1,9 +1,10 @@
 /**
- * Dual Storage Engine: OPFS (Origin Private File System) + IndexedDB Fallback.
- * Payload bytes are encrypted before they are written to OPFS or IndexedDB.
+ * Dual Storage Engine: Desktop FS (Tauri) → OPFS → IndexedDB fallback.
+ * Payload bytes are encrypted before they are written to any tier.
  * Legacy raw payloads are accepted for migration and re-sealed on authenticated read.
  */
 
+import { desktopPayloads } from '../../desktop/adapter';
 
 const DB_NAME = 'eventide-universe';
 const STORE = 'payloads';
@@ -44,6 +45,10 @@ async function getOpfsRoot(): Promise<FileSystemDirectoryHandle | null> {
 }
 
 async function writeStoredPayload(id: string, stored: Blob): Promise<void> {
+  /* Desktop tier first: real files in the OS app-data dir, no quota. */
+  const desktopDone = await desktopPayloads.put(id, new Uint8Array(await stored.arrayBuffer()));
+  if (desktopDone) return;
+
   const root = await getOpfsRoot();
   if (root) {
     try {
@@ -67,6 +72,10 @@ async function writeStoredPayload(id: string, stored: Blob): Promise<void> {
 }
 
 async function readStoredPayload(id: string): Promise<Blob | null> {
+  /* Desktop tier first. */
+  const desktopBytes = await desktopPayloads.get(id);
+  if (desktopBytes) return new Blob([desktopBytes.slice().buffer as ArrayBuffer]);
+
   const root = await getOpfsRoot();
   if (root) {
     try {
@@ -137,6 +146,9 @@ export async function delLocalPayload(id: string): Promise<void> {
 }
 
 export async function delPayload(id: string): Promise<void> {
+  /* Desktop tier first (ignore absence). */
+  await desktopPayloads.delete(id);
+
   const root = await getOpfsRoot();
   if (root) {
     try {

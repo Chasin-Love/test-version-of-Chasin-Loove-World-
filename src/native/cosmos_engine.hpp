@@ -95,4 +95,72 @@ extern "C" {
     double cosmos_time_dilation(double radius, double mass);
 }
 
+/* ---------------------------------------------------------------------------
+ * v2 batch exports — the renderer-facing simulation core.
+ *
+ * The webview renderer calls these through the Tauri shell (Rust FFI, C++
+ * compiled into the binary via cc) or through the WASM build. The pure-TS
+ * physicsEngine.ts remains the reference implementation and last-resort
+ * fallback; these must stay numerically identical to it.
+ * ------------------------------------------------------------------------- */
+
+#define COSMOS_VERSION_STRING "2.0.0"
+
+/* Field layout of each telemetry record produced by cosmos_physics_batch.
+ * Mirrors BodyPhysicsData in src/physics/physicsEngine.ts in exact order. */
+#define COSMOS_PHYSICS_FIELD_COUNT 41
+
+/* habitableStatus encoding */
+#define COSMOS_HABIT_FROZEN 0
+#define COSMOS_HABIT_GOLDILOCKS 1
+#define COSMOS_HABIT_TOO_HOT 2
+
+/* body kind encoding passed to cosmos_physics_batch */
+#define COSMOS_KIND_STAR 0
+#define COSMOS_KIND_PLANET 1
+#define COSMOS_KIND_DWARF 2
+#define COSMOS_KIND_NEBULA 3
+#define COSMOS_KIND_HOLE 4
+#define COSMOS_KIND_VAULT 5
+
+extern "C" {
+
+    /* Engine identity for honest telemetry (never hard-code in JS again). */
+    const char* cosmos_version();
+
+    /* Single-body Kepler position — exact port of calculateKeplerPosition.
+     * out receives 7 doubles: x, y, z, trueAnomaly, currentRadius (5 used). */
+    void cosmos_orbit_position(double a, double eccentricity, double phase,
+                               double inclination, double simDays, double speed,
+                               double* out);
+
+    /* Batch Kepler positions for n bodies per frame.
+     * Inputs: per-body arrays a/e/phase/incl/speed (each n doubles) + simDays.
+     * Outputs: outXyz (3n), outRadius (n), outTrueAnomaly (n). */
+    void cosmos_kepler_batch(const double* a, const double* e, const double* phase,
+                             const double* incl, const double* speed, int n,
+                             double simDays, double* outXyz,
+                             double* outRadius, double* outTrueAnomaly);
+
+    /* Full astrophysics telemetry batch — exact port of calculatePhysics.
+     * ids: n pointers to NUL-terminated body ids (profile lookup).
+     * orbitA / radius / phase / speed: n doubles each. kinds: n ints
+     * (COSMOS_KIND_*). hasRings: n ints (0/1). simTimeSec: sim time seconds.
+     * out: n * COSMOS_PHYSICS_FIELD_COUNT doubles, row-major per body. */
+    void cosmos_physics_batch(const char* const* ids, const double* orbitA,
+                              const double* radius, const int* kinds,
+                              const int* hasRings, const double* phase,
+                              const double* speed, int n, double simTimeSec,
+                              double* out);
+
+    /* Terrain value-noise fbm — bit-exact port of cpuFbm in engine.ts
+     * (4 octaves, sin-hash value noise) so native-driven terrain matches
+     * the TS reference visually. */
+    double cosmos_terrain_fbm(double x, double y);
+
+    /* Benchmark: runs iterations of RK4 over n bodies, returns ops/sec.
+     * Uses an internal simulator instance; no state leaks to the caller. */
+    double cosmos_benchmark_rk4(int nBodies, int iterations);
+}
+
 #endif // COSMOS_ENGINE_HPP

@@ -443,33 +443,78 @@ black hole, frame-rate-independent camera rig, `immuneToVortex` invariant system
 
 ## 12. Upgrade Roadmap (Waves)
 
-### Wave 1 — Foundation & Health *(this wave)*
+### Wave 1 — Foundation & Health *(complete — September 2026)*
 1. ✓ Purge dead code (~1,600+ lines): `kamui.ts`, unused GLSL, duplicate executors, shim
    stubs, `test/` reality → bin.
 2. ✓ Server security: sanitize + containment-assert every fs path operation.
 3. ✓ Centralize `HIERARCHY_STAGES` (single source for labels, dials, LOD).
 4. ✓ De-duplicate utilities (`makeGlowTexture`, math helpers, UI lib).
 5. ✓ Behavioral fixes: remove double create-folder POST; stop `primeState` timestamp
-   falsification; fix generated-template import paths.
-6. ✓ Light engine decomposition: `src/engine/systems/` — `stageThresholds.ts`,
-   `portalController.ts`, `levelSystem.ts` (behavior-preserving extraction).
+   falsification; daemon surface template now matches the real `UniverseSurfaceConfig`.
+6. ✓ Engine systems: `src/engine/systems/` — `stageThresholds.ts`, `portalPhases.ts`
+   (phase contract + transition table), `levelSystem.ts`.
 
-### Wave 2 — Storage & Reliability
-- Promote OPFS/IndexedDB to primary state store (localStorage → cache/legacy), quota
-  warnings in UI.
-- EFS indexes: `fileId → nodeId`, `parentId → children[]` maps maintained on mutation.
-- Schema versioning with real migrations + tests; move shadows to payload tier.
-- Refactor `VaultUI.tsx` into per-domain modules (gate, identities, viewer, runners,
-  passwords, terminal, mini-apps).
-- Replace `fakePeaks` with real WebAudio analysis; bundle Pyodide locally (offline-first).
+### Wave 2 — Desktop Application: Tauri 2 + C++ Core *(complete — September 2026)*
+
+**Architecture decision:** Tauri 2 shell (Linux WebKitGTK + Windows WebView2, desktop-first,
+web keeps working). The C++ core is compiled directly into the desktop binary via the
+`cc` crate in `src-tauri/build.rs` — no DLL loading anywhere.
+
+**What landed:**
+
+1. **C++ core v2** (`src/native/cosmos_engine.{hpp,cpp}`): new flat C exports —
+   `cosmos_orbit_position` / `cosmos_kepler_batch` (exact port of
+   `calculateKeplerPosition`), `cosmos_physics_batch` (exact 41-field port of
+   `calculatePhysics` incl. BODY_PROFILES + greenhouse bumps), `cosmos_terrain_fbm`
+   (bit-exact `cpuFbm` port), `cosmos_benchmark_rk4`, `cosmos_version`.
+2. **Bridge loader chain** (`src/native/cpp_bridge.ts` v2): native-cpp (Tauri invoke) →
+   WASM (`src/native/wasm/`, built by `scripts/build-wasm.sh` when emsdk is present) →
+   TypeScript reference. `verifyParity()` cross-checks the active tier against the TS
+   reference and the engine card shows the receipt.
+3. **Engine integration**: `updateBodies` batch-evaluates orbits through the C++ core
+   every other frame (async cache, quarter-day staleness guard, inline TS fallback);
+   `CppNativeEngineCard` rewritten to report the *actual* active backend, version and
+   benchmark — no more hard-coded "C++20 READY_TO_BUILD" marketing.
+4. **Desktop shell** (`src-tauri/`): Tauri 2 config, window, icons; Rust commands for
+   cosmos (`cosmos_status/kepler_batch/physics_batch/benchmark/terrain_fbm`), storage
+   (`store_state_read/write`, raw-IPC `store_payload_put` with `[u16 idLen][id][bytes]`
+   framing, `payload_get/delete/list/stats`) and the reality daemon port
+   (`reality_list/bin/move/restore/purge/empty/rename/create_folder`) with the same
+   sanitize + containment rules as `paths.ts`.
+5. **Frontend adapters** (`src/desktop/adapter.ts`): `desktopStore` (state JSON to real
+   files in app-data), `desktopPayloads` (payload bytes; OPFS/IndexedDB remain the web
+   tiers inside `indexedDB.ts`'s unchanged export surface), `realityApi()` (native
+   commands on desktop, `fetch('/api/...')` on web). `state.ts` persists to both tiers;
+   `hydrateDesktopSnapshot()` adopts the authoritative file at boot (single guarded
+   reload; first boot pushes the webview cache to disk).
+6. **Offline-first**: Pyodide v0.26.4 vendored into `public/pyodide/` (worker falls back
+   to CDN only if the local copy is missing); Google Fonts vendored into
+   `public/fonts/fonts.css` (index.html no longer references the CDN).
+7. **Cinematic black hole tier** (`src/engine/blackholeRaymarch.ts` +
+   `src/engine/capability.ts`): GPU probe (`WEBGL_debug_renderer_info`, WebGL2, software-
+   rasterizer denylist) → Low/Medium/Cinematic tiers with a user selector in the engine
+   card. CINEMATIC enables a raymarched null-geodesic overlay (volumetric disk, Doppler
+   beaming, lensed starfield, photon ring) **additively above the composite** — any
+   shader failure disarms the tier for the session and the infallible composite alone
+   renders. Pixel ratio 2 on cinematic.
+8. **CI** (`.github/workflows/desktop.yml`): windows-latest (NSIS) + ubuntu-latest
+   (deb/AppImage) — typecheck → C++ core via cc → tauri build → artifacts. The VS Build
+   Tools installer cannot run inside the agent sandbox (.NET TLS spawn restriction), so
+   local Windows builds use `scripts/setup-windows-toolchain.ps1` run manually.
+
+**Honest engineering note preserved for posterity:** the visuals are GLSL on the GPU and
+run at the same speed from webview or native host. The C++ core's real wins are the
+simulation CPU (N-body/Kepler/telemetry/noise batches), memory headroom, quota-free
+native storage, and the driver headroom that made the raymarched tier possible as a
+*gated* upgrade rather than a fragility risk. The full Qt/Vulkan C++ rewrite remains a
+documented future path.
 
 ### Wave 3 — Performance & Fidelity
-- Cache time-invariant physics fields per body; recompute only orbit-dependent values.
-- Real WASM: Emscripten build of `cosmos_engine.cpp` C API → true N-body option behind
-  `CppNativeEngineCard` (honest `getEngineInfo`).
-- Granular multiverse rebuild invalidation (replace JSON signatures); single hover
-  discriminator; structured pick payloads.
-- Perf marks across Kamui/galaxy-warp/portal state machines.
+- Real N-body dynamics layer driving the render loop from `cosmos_step_simulation`
+  (beyond the Kepler batch), symplectic integrator option.
+- Build WASM artifact in CI (emsdk job) so web gets the native core without Tauri.
+- Granular multiverse rebuild invalidation; single hover discriminator; structured pick
+  payloads.
 
 ### Wave 4 — New Cosmic Features
 - Wire CosmicLineageModal "+ Create …" actions to real reality/sector creation.

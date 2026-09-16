@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { InnerWorldInfo, UniverseEngine } from './engine/engine';
-import { actions, getState, newId } from './state';
+import { actions, getState, newId, hydrateDesktopSnapshot } from './state';
 import { MEANING_LABEL, type CosmicBody, type Meaning } from './types';
 import { chime, initAudio, isMuted, setAudioMode, toggleMute } from './audio';
 import type { WinRect } from './ui/DiaryWindow';
@@ -103,6 +103,11 @@ export default function App() {
   /* announce the running build so you can confirm the bundle is current */
   useEffect(() => {
     console.log(`%c✦ MY UNIVERSE — build ${BUILD}`, 'color:#f2c178;font-weight:bold');
+  }, []);
+
+  /* desktop boot hydrate: adopt the authoritative state file (may reload once) */
+  useEffect(() => {
+    void hydrateDesktopSnapshot();
   }, []);
 
   /* real local time, ticking */
