@@ -71,21 +71,29 @@ export function computeStats(s: UniverseState, asOf?: number) {
   };
 }
 
-/** Computes consecutive writing days ending today or yesterday */
+/** Local calendar-day bucket — UTC day numbers made evening writers lose streaks at 7pm. */
+function localDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Computes consecutive writing days ending today or yesterday (in local time) */
 export function computeStreak(entries: { createdAt: number }[]): number {
   if (!entries.length) return 0;
-  const days = new Set(entries.map((e) => Math.floor(e.createdAt / DAY_MS)));
-  let cursor = Math.floor(Date.now() / DAY_MS);
-  if (!days.has(cursor)) cursor -= 1;
+  const days = new Set(entries.map((e) => localDay(e.createdAt)));
+  const cursor0 = localDay(Date.now());
+  let cursor = cursor0;
+  if (!days.has(cursor)) cursor = cursor0 - DAY_MS;
   if (!days.has(cursor)) return 0;
   let streak = 0;
   while (days.has(cursor)) {
     streak++;
-    cursor--;
+    cursor -= DAY_MS;
   }
   return streak;
 }
 
 export function writingDays(entries: { createdAt: number }[]): number {
-  return new Set(entries.map((e) => Math.floor(e.createdAt / DAY_MS))).size;
+  return new Set(entries.map((e) => localDay(e.createdAt))).size;
 }

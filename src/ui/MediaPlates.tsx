@@ -58,7 +58,10 @@ function fmtSMPTE(sec: number): string {
   return `${h < 10 ? '0' : ''}${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}:${frames < 10 ? '0' : ''}${frames}`;
 }
 
-function useAttachmentSource(att: Attachment): string {
+/** Resolves an attachment to displayable bytes: inline dataUrl, or the
+ *  offloaded OPFS/IndexedDB payload as a blob URL. Shared by the plates AND
+ *  the attachment editor. */
+export function useAttachmentSource(att: Attachment): string {
   const [source, setSource] = useState(att.dataUrl || '');
 
   useEffect(() => {
@@ -111,8 +114,41 @@ export const AudioPlate = memo(function AudioPlate({
   const source = useAttachmentSource(att);
   const [eqPreset, setEqPreset] = useState<'Cosmic' | 'Vocal' | 'Bass' | 'Flat'>('Cosmic');
   const [hoverFrac, setHoverFrac] = useState<number | null>(null);
+  const eqNodesRef = useRef<{ ctx: AudioContext; filter: BiquadFilterNode } | null>(null);
 
   const peaks = att.peaks && att.peaks.length ? att.peaks : synthBars(att.name + att.id, 48, 0.15);
+
+  /* REAL equalizer: a BiquadFilter between the element and the speakers.
+     Created lazily on first user click (autoplay policy) and never throws. */
+  const applyEq = (preset: 'Cosmic' | 'Vocal' | 'Bass' | 'Flat') => {
+    try {
+      const audio = audioRef.current;
+      if (!audio) return;
+      if (!eqNodesRef.current) {
+        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new AC();
+        const srcNode = ctx.createMediaElementSource(audio);
+        const filter = ctx.createBiquadFilter();
+        srcNode.connect(filter);
+        filter.connect(ctx.destination);
+        eqNodesRef.current = { ctx, filter };
+      }
+      const { ctx, filter } = eqNodesRef.current;
+      void ctx.resume();
+      /* one shaping filter per profile */
+      if (preset === 'Bass') { filter.type = 'lowshelf'; filter.frequency.value = 180; filter.gain.value = 7; }
+      else if (preset === 'Vocal') { filter.type = 'peaking'; filter.frequency.value = 2600; filter.Q.value = 0.9; filter.gain.value = 5; }
+      else if (preset === 'Cosmic') { filter.type = 'highshelf'; filter.frequency.value = 5200; filter.gain.value = 3.5; }
+      else { filter.gain.value = 0; }
+    } catch {
+      /* graph unavailable (e.g. cross-origin source) — the label still cycles */
+    }
+  };
+
+  useEffect(() => () => {
+    eqNodesRef.current?.ctx.close().catch(() => {});
+    eqNodesRef.current = null;
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -120,9 +156,27 @@ export const AudioPlate = memo(function AudioPlate({
 
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onLoadedMeta = () => {
-      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
-        setDuration(audio.duration);
-      }
+      const probe = () => {
+        if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+          setDuration(audio.duration);
+          return true;
+        }
+        return false;
+      };
+      if (probe()) return;
+      /* Chrome reports Infinity for MediaRecorder webm blobs — forcing a seek
+         makes it compute the real duration */
+      const prev = audio.currentTime;
+      audio.currentTime = 1e7;
+      audio.onseeked = () => {
+        audio.onseeked = null;
+        audio.currentTime = prev;
+        if (!probe()) {
+          audio.ontimeupdate = () => {
+            if (probe()) audio.ontimeupdate = null;
+          };
+        }
+      };
     };
     const onEnded = () => {
       setIsPlaying(false);
@@ -236,13 +290,12 @@ export const AudioPlate = memo(function AudioPlate({
             <div className="flex items-center gap-1.5">
               <span className="font-semibold text-white tracking-wide text-xs truncate drop-shadow-sm">{att.name}</span>
               <span className="px-1.5 py-0.2 rounded text-[8px] bg-cyan-500/20 border border-cyan-400/30 text-cyan-200 uppercase tracking-widest shrink-0">
-                DSP-AUDIO
+                {att.fileExt ? att.fileExt.toUpperCase() : 'AUDIO'}
               </span>
             </div>
             <div className="flex items-center gap-2 text-[8.5px] text-slate-400 mt-0.5">
-              <span className="text-cyan-300/80">320kbps · 48kHz</span>
-              <span>•</span>
-              <span>SMPTE: {fmtSMPTE(currentTime)}</span>
+              <span className="text-cyan-300/80">{fmtSMPTE(currentTime)}{duration ? ` / ${fmtSMPTE(duration)}` : ''}</span>
+              {att.size ? (<><span>•</span><span>{(att.size / 1024 / 1024).toFixed(1)} MB</span></>) : null}
             </div>
           </div>
         </div>
@@ -250,14 +303,16 @@ export const AudioPlate = memo(function AudioPlate({
         {/* Live Audio Status / Preset Badge */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               const presets: ('Cosmic' | 'Vocal' | 'Bass' | 'Flat')[] = ['Cosmic', 'Vocal', 'Bass', 'Flat'];
               const next = presets[(presets.indexOf(eqPreset) + 1) % presets.length];
               setEqPreset(next);
-              toast(`EQ Mode: ${next}`);
+              applyEq(next);
+              toast(`EQ profile: ${next}`);
             }}
-            className="px-2 py-0.5 rounded-lg bg-white/5 hover:bg-cyan-500/20 border border-white/10 hover:border-cyan-400/30 text-[9px] text-cyan-300 transition-colors flex items-center gap-1 backdrop-blur-sm"
-            title="Toggle EQ Harmonic Filter"
+            className={`px-2 py-0.5 rounded-lg border text-[9px] transition-colors flex items-center gap-1 backdrop-blur-sm ${eqPreset === 'Flat' ? 'bg-white/5 hover:bg-cyan-500/20 border-white/10 hover:border-cyan-400/30 text-cyan-300' : 'bg-cyan-500/15 border-cyan-400/30 text-cyan-200'}`}
+            title="Equalizer profile — real WebAudio filter (bass lift / vocal presence / air)"
           >
             <Sliders size={9} />
             <span>{eqPreset}</span>
@@ -289,20 +344,24 @@ export const AudioPlate = memo(function AudioPlate({
           {/* Subtle Grid Scanning Background */}
           <div className="absolute inset-0 bg-[linear-gradient(to_right,#06b6d40a_1px,transparent_1px),linear-gradient(to_bottom,#06b6d40a_1px,transparent_1px)] bg-size-[12px_12px] pointer-events-none" />
 
-          {/* Dual Channel VU Meters on left */}
+          {/* Dual Channel VU Meters on left — driven by the local waveform peak, not random */}
           <div className="flex flex-col justify-between h-full pr-1.5 border-r border-white/10 shrink-0 z-10">
             <span className="text-[7px] text-cyan-400 font-bold">L</span>
             <div className="w-1 flex-1 flex flex-col justify-end gap-px my-0.5">
-              {[...Array(6)].map((_, i) => (
-                <div
-                  key={i}
-                  className={`w-full h-1 rounded-sm ${
-                    isPlaying && Math.random() > i * 0.15
-                      ? i < 2 ? 'bg-red-400 shadow-[0_0_4px_#f87171]' : i < 4 ? 'bg-amber-400' : 'bg-cyan-400'
-                      : 'bg-white/10'
-                  }`}
-                />
-              ))}
+              {(() => {
+                const playIdx = duration > 0 ? Math.floor(progressFraction * peaks.length) : -1;
+                const level = isPlaying && playIdx >= 0 ? peaks[playIdx] ?? 0 : 0;
+                return [...Array(6)].map((_, i) => (
+                  <div
+                    key={i}
+                    className={`w-full h-1 rounded-sm ${
+                      level > (i + 0.5) / 6
+                        ? i < 2 ? 'bg-red-400 shadow-[0_0_4px_#f87171]' : i < 4 ? 'bg-amber-400' : 'bg-cyan-400'
+                        : 'bg-white/10'
+                    }`}
+                  />
+                ));
+              })()}
             </div>
             <span className="text-[7px] text-cyan-400 font-bold">R</span>
           </div>
@@ -618,9 +677,13 @@ export const VideoPlate = memo(function VideoPlate({
         src={source || undefined}
         preload="metadata"
         playsInline
-        className={`w-full h-auto block max-h-95 mx-auto bg-[#02050b] transition-all ${
-          aspectMode === 'cover' ? 'object-cover' : 'object-contain'
-        }`}
+        className={`w-full block mx-auto bg-[#02050b] transition-all ${
+          aspectMode === 'cover'
+            ? 'h-72 object-cover'
+            : aspectMode === 'cinema'
+            ? 'h-72 object-cover rounded-xl'
+            : 'h-auto object-contain'
+        } ${aspectMode !== 'contain' ? 'max-h-95' : ''}`}
         onClick={togglePlay}
       />
 
@@ -641,12 +704,22 @@ export const VideoPlate = memo(function VideoPlate({
           <Film size={11} className="text-cyan-400" />
           <span className="truncate max-w-45 font-medium text-white">{att.name}</span>
           <span className="text-cyan-400/60">·</span>
-          <span className="text-cyan-300 text-[9px]">4K H.264/MP4</span>
+          <span className="text-cyan-300 text-[9px]">{att.fileExt ? att.fileExt.toUpperCase() : 'VIDEO'}</span>
         </div>
 
-        <div className="flex items-center gap-1 font-mono text-[9px] px-2 py-0.5 rounded-lg bg-slate-950/80 backdrop-blur-md border border-white/10 text-cyan-300">
-          <span>SMPTE {fmtSMPTE(currentTime)}</span>
-        </div>
+        {/* Fit mode — wired to the aspectMode state (was set-but-never-used) */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const modes: ('contain' | 'cover' | 'cinema')[] = ['contain', 'cover', 'cinema'];
+            const next = modes[(modes.indexOf(aspectMode) + 1) % modes.length];
+            setAspectMode(next);
+          }}
+          className="pointer-events-auto px-2 py-0.5 rounded-lg bg-slate-950/80 backdrop-blur-md border border-white/10 text-cyan-300 hover:text-white hover:border-cyan-400/40 transition-colors"
+          title="cycle fit mode — contain · fill · cinema"
+        >
+          {aspectMode === 'contain' ? 'FIT' : aspectMode === 'cover' ? 'FILL' : 'CINEMA'} · SMPTE {fmtSMPTE(currentTime)}
+        </button>
       </div>
 
       {/* Overlay Video Control Console */}
@@ -855,7 +928,7 @@ export const ImageOrGifPlate = memo(function ImageOrGifPlate({
             <button
               onClick={toggleGifPlay}
               className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-950/85 backdrop-blur-md border border-cyan-400/50 text-[9px] font-mono text-cyan-300 shadow-md hover:bg-slate-900 transition-colors"
-              title={isGifPaused ? 'Resume GIF stream' : 'Freeze GIF frame'}
+              title={isGifPaused ? 'Resume GIF stream' : 'Show first frame (browsers cannot grab the live frame of an <img> GIF)'}
             >
               {isGifPaused ? (
                 <>

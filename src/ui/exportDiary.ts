@@ -33,13 +33,15 @@ export async function exportDiaryDocument(
     }
 
     // 2. Clone the container into an off-screen staging area with full content height
+    //    (staging width mirrors the live page so %-positioned plates land identically)
+    const liveWidth = sourceContainer.getBoundingClientRect().width || 820;
     const staging = document.createElement('div');
     staging.id = 'diary-export-staging';
     staging.style.cssText = `
       position: fixed;
       left: -9999px;
       top: 0;
-      width: 820px;
+      width: ${liveWidth}px;
       height: auto;
       min-height: auto;
       max-height: none;
@@ -56,7 +58,7 @@ export async function exportDiaryDocument(
     const clone = sourceContainer.cloneNode(true) as HTMLElement;
     clone.style.cssText = `
       position: relative;
-      width: 820px;
+      width: ${liveWidth}px;
       height: auto;
       max-height: none;
       overflow: visible;
@@ -72,6 +74,11 @@ export async function exportDiaryDocument(
         if (!el.classList.contains('tag-chip') && !el.classList.contains('mood-dot')) {
           el.remove();
         }
+      } else if (el.classList.contains('templates') || el.classList.contains('resize-grip')) {
+        el.remove();
+      } else if (el.hasAttribute('contenteditable')) {
+        el.removeAttribute('contenteditable');
+        (el as HTMLElement).style.outline = 'none';
       }
     });
 
@@ -224,8 +231,6 @@ export async function exportDiaryDocument(
         pixelRatio,
         quality: 1.0,
         backgroundColor: '#070b16',
-        cacheBust: true,
-        skipFonts: true,
       });
 
       const a = document.createElement('a');
@@ -240,8 +245,6 @@ export async function exportDiaryDocument(
       const canvas = await toCanvas(clone, {
         pixelRatio,
         backgroundColor: '#070b16',
-        cacheBust: true,
-        skipFonts: true,
       });
 
       const imgData = canvas.toDataURL('image/jpeg', 0.98);
@@ -263,10 +266,23 @@ export async function exportDiaryDocument(
       let position = margin;
       let pageNum = 1;
 
+      const stampFooter = (n: number) => {
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        pdf.setTextColor(140, 160, 190);
+        pdf.text(
+          `Page ${n} · ${planet.name.toUpperCase()} · ${entry.title}`,
+          pageWidth / 2,
+          pageHeight - 5,
+          { align: 'center' }
+        );
+      };
+
       // First Page
       pdf.setFillColor(7, 11, 22);
       pdf.rect(0, 0, pageWidth, pageHeight, 'F');
       pdf.addImage(imgData, 'JPEG', margin, position, contentWidth, contentHeight);
+      stampFooter(1);
       heightLeft -= (pageHeight - margin * 2);
 
       // Additional pages if diary is very long
@@ -276,42 +292,39 @@ export async function exportDiaryDocument(
         pdf.setFillColor(7, 11, 22);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
         pdf.addImage(imgData, 'JPEG', margin, position, contentWidth, contentHeight);
-        
-        // Page footer stamp
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(8);
-        pdf.setTextColor(140, 160, 190);
-        pdf.text(
-          `Page ${pageNum + 1} · ${planet.name.toUpperCase()} · ${entry.title}`,
-          pageWidth / 2,
-          pageHeight - 5,
-          { align: 'center' }
-        );
+        stampFooter(pageNum + 1);
 
         heightLeft -= (pageHeight - margin * 2);
         pageNum++;
       }
 
       if (options.format === 'print') {
-        // Try native print if browser/window allows it
-        let printOpened = false;
+        /* Print the generated document itself (an iframe of the PDF blob) —
+           window.print() used to print the whole live app instead. */
         try {
-          // Check if top window printing is allowed
-          if (window.self === window.top) {
-            window.print();
-            printOpened = true;
-          }
+          const blob = pdf.output('blob');
+          const url = URL.createObjectURL(blob);
+          const frame = document.createElement('iframe');
+          frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;border:0;';
+          frame.src = url;
+          frame.onload = () => {
+            try {
+              frame.contentWindow?.focus();
+              frame.contentWindow?.print();
+            } catch {
+              /* print blocked — the saved PDF below is the fallback */
+            }
+            setTimeout(() => {
+              URL.revokeObjectURL(url);
+              frame.remove();
+            }, 60_000);
+          };
+          document.body.appendChild(frame);
+          toast(`print dialog opened for the document (${pageNum} page${pageNum > 1 ? 's' : ''})`);
         } catch {
-          printOpened = false;
+          pdf.save(`${baseFilename}_print-ready.pdf`);
+          toast(`Print-ready PDF saved (${pageNum} page${pageNum > 1 ? 's' : ''})`);
         }
-
-        // In sandbox iframe or when window.print is blocked, deliver print-ready PDF
-        pdf.save(`${baseFilename}_print-ready.pdf`);
-        toast(
-          printOpened
-            ? 'print dialog opened & document saved'
-            : `Print-ready PDF saved (${pageNum} page${pageNum > 1 ? 's' : ''}) — ready to print from your PDF viewer`
-        );
       } else {
         pdf.save(`${baseFilename}.pdf`);
         toast(`Vector PDF document saved (${pageNum} page${pageNum > 1 ? 's' : ''} with zero pixel cracking)`);
@@ -326,6 +339,6 @@ export async function exportDiaryDocument(
     if (staging && staging.parentNode) {
       staging.parentNode.removeChild(staging);
     }
-    toast('document export completed via fallback', 'warn');
+    toast(`export failed: ${err instanceof Error ? err.message : 'unknown error'}`, 'warn');
   }
 }

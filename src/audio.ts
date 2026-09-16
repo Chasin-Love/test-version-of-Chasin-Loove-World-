@@ -99,6 +99,8 @@ export function setAudioMode(m: 'space' | 'diary' | 'vault' | 'core') {
 
 /* ------------------------------ recording ------------------------------ */
 
+let recStart = 0;
+
 export async function startRecording(): Promise<boolean> {
   const c = ensure();
   if (!c) return false;
@@ -108,6 +110,7 @@ export async function startRecording(): Promise<boolean> {
     recChunks = [];
     rec.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
     rec.start();
+    recStart = performance.now();
     return true;
   } catch {
     return false;
@@ -117,17 +120,69 @@ export async function startRecording(): Promise<boolean> {
 export function stopRecording(): Promise<{ dataUrl: string; peaks: number[]; duration: number } | null> {
   return new Promise((resolve) => {
     if (!rec || !recStream) { resolve(null); return; }
-    const started = performance.now();
-    rec.onstop = () => {
-      const blob = new Blob(recChunks, { type: rec!.mimeType || 'audio/webm' });
-      const dur = (performance.now() - started) / 1000;
+    const recorder = rec;
+    const finish = () => {
+      const dur = Math.max(0.4, (performance.now() - recStart) / 1000);
       recStream!.getTracks().forEach((t) => t.stop());
       recStream = null; rec = null;
+      if (!recChunks.length) { resolve(null); return; }
+      const blob = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' });
       const r = new FileReader();
       r.onload = () => resolve({ dataUrl: r.result as string, peaks: fakePeaks(blob.size), duration: dur });
       r.readAsDataURL(blob);
     };
-    rec.stop();
+    recorder.onstop = () => {
+      const blob = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' });
+      /* compute REAL waveform peaks when the browser can decode the recording;
+         falls back to the synthetic curve for undecodable containers */
+      void blob.arrayBuffer()
+        .then((buf) => {
+          const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+          const ac = new AC();
+          return ac.decodeAudioData(buf).then((audio) => {
+            const data = audio.getChannelData(0);
+            const buckets = 48;
+            const per = Math.max(1, Math.floor(data.length / buckets));
+            const peaks: number[] = [];
+            for (let i = 0; i < buckets; i++) {
+              let peak = 0;
+              for (let j = i * per; j < (i + 1) * per && j < data.length; j += 16) {
+                const v = Math.abs(data[j]);
+                if (v > peak) peak = v;
+              }
+              peaks.push(Math.max(0.06, Math.min(1, peak)));
+            }
+            void ac.close();
+            return peaks;
+          }).catch(() => null);
+        })
+        .then((peaks) => {
+          const dur = Math.max(0.4, (performance.now() - recStart) / 1000);
+          recStream?.getTracks().forEach((t) => t.stop());
+          recStream = null; rec = null;
+          if (!recChunks.length) { resolve(null); return; }
+          const blob2 = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' });
+          const r = new FileReader();
+          r.onload = () => resolve({ dataUrl: r.result as string, peaks: peaks ?? fakePeaks(blob2.size), duration: dur });
+          r.readAsDataURL(blob2);
+        })
+        .catch(() => { finish(); });
+    };
+    try {
+      if (recorder.state === 'inactive') {
+        /* recorder died externally (mic unplugged / permission revoked) */
+        recorder.onstop = null;
+        recStream.getTracks().forEach((t) => t.stop());
+        recStream = null; rec = null;
+        resolve(null);
+        return;
+      }
+      recorder.stop();
+    } catch {
+      recStream?.getTracks().forEach((t) => t.stop());
+      recStream = null; rec = null;
+      resolve(null);
+    }
   });
 }
 

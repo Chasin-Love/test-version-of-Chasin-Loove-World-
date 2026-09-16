@@ -1,13 +1,14 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { actions, newId } from '../state';
-import { fmtDate, computeStreak, sanitizeDiaryHtml } from '../backend';
+import { fmtDate, computeStreak, sanitizeDiaryHtml, delLocalPayload } from '../backend';
 import { MEANING_LABEL, type Attachment, type CosmicBody, type DiaryEntry, type Mood, type Weather } from '../types';
 import { sfxConnect, sfxTick, startRecording, stopRecording } from '../audio';
 import Book from './Book';
 import { IcBook, IcClose, IcCompress, IcCopy, IcDownload, IcEdit, IcExpand, IcGlobe, IcImage, IcInline, IcMic, IcMin, IcMoon, IcPause, IcPlay, IcPlus, IcSearch, IcStar, IcStop, IcTrash, useUniverse } from './bits';
 import { toast } from './toast';
 import { readAsDataURL, synthBars } from './lib';
-import { AudioPlate, VideoPlate, ImageOrGifPlate, FileOrCodePlate } from './MediaPlates';
+import { AudioPlate, VideoPlate, ImageOrGifPlate, FileOrCodePlate, useAttachmentSource } from './MediaPlates';
+import AttachmentEditor from './AttachmentEditor';
 
 export interface WinRect { x: number; y: number; w: number; h: number; }
 
@@ -171,27 +172,6 @@ const TEMPLATES: { label: string; title: string; body: string }[] = [
   { label: 'unsent letter', title: 'Letter, unsent', body: 'To —\n\n\n\n— from the far side of the planet' },
 ];
 
-function loadImg(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((res) => {
-    const img = new Image();
-    img.onload = () => res(img);
-    img.onerror = () => res(null);
-    img.src = src;
-  });
-}
-
-function loadVideoFrame(src: string): Promise<HTMLVideoElement | null> {
-  return new Promise((res) => {
-    const v = document.createElement('video');
-    v.muted = true; v.playsInline = true; v.preload = 'auto';
-    const done = (ok: boolean) => res(ok ? v : null);
-    v.onloadeddata = () => { try { v.currentTime = 0.05; } catch { done(true); } };
-    v.onseeked = () => done(true);
-    v.onerror = () => done(false);
-    setTimeout(() => done(false), 2500);
-    v.src = src;
-  });
-}
 
 const htmlToText = (html: string): string => {
   const d = document.createElement('div');
@@ -200,22 +180,6 @@ const htmlToText = (html: string): string => {
   return d.textContent || '';
 };
 
-const htmlToParagraphs = (html: string): string[] => {
-  const d = document.createElement('div');
-  d.innerHTML = html;
-  d.querySelectorAll('.plate-spacer').forEach((n) => n.remove());
-  
-  // Replace <br> and block closing tags with newlines
-  const text = d.innerHTML
-    .replace(/<br\s*[\/]?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, '');
-  
-  const unescaped = document.createElement('textarea');
-  unescaped.innerHTML = text;
-  return unescaped.value.split(/\r?\n/);
-};
 
 type DiaryExportOptions = { format: 'pdf' | 'png' | 'print'; quality?: 'standard' | 'ultra' | 'master' };
 
@@ -229,520 +193,6 @@ async function exportDiaryDocumentLazy(
   await exportDiaryDocument(entry, planet, sourceContainer, options);
 }
 
-async function exportPage(entry: DiaryEntry, planet: CosmicBody, pageWidthPx?: number) {
-  // Ensure custom web fonts are fully rasterized
-  try {
-    await document.fonts.ready;
-  } catch {
-    /* proceed if font loading check is not supported */
-  }
-
-  const W = 1200;
-  const DPR = 2; // 2x supersampling for high-DPI print/scan precision
-  const refW = pageWidthPx && pageWidthPx > 100 ? pageWidthPx : 640;
-  const scale = W / refW;
-
-  const marginL = 80;
-  const marginR = 80;
-  const contentW = W - marginL - marginR;
-  const headerTop = 64;
-
-  const atts = entry.attachments;
-  const media = await Promise.all(
-    atts.map(async (a) => {
-      if (a.kind === 'image') return { img: await loadImg(a.dataUrl), vid: null as HTMLVideoElement | null };
-      if (a.kind === 'video') return { img: null as HTMLImageElement | null, vid: await loadVideoFrame(a.dataUrl) };
-      return { img: null as HTMLImageElement | null, vid: null as HTMLVideoElement | null };
-    }),
-  );
-
-  // Calculate high-precision bounding box for each attachment
-  const bodyStartY = 310;
-  interface AttBox {
-    att: Attachment;
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-    right: number;
-    bottom: number;
-    isLeft: boolean;
-    isRight: boolean;
-    isCenter: boolean;
-    img: HTMLImageElement | null;
-    vid: HTMLVideoElement | null;
-  }
-
-  const attBoxes: AttBox[] = atts.map((a, i) => {
-    const rawX = a.x ?? 6;
-    const left = marginL + (rawX / 100) * contentW;
-    const width = ((a.w ?? PLATE_DEFAULT_W[a.kind]) / 100) * contentW;
-    const top = bodyStartY + (a.y ?? 48) * (contentW / refW);
-    const { img, vid } = media[i];
-
-    let height: number;
-    if (a.kind === 'image') {
-      height = img && img.naturalWidth > 0 ? width * (img.naturalHeight / img.naturalWidth) : width * 0.62;
-    } else if (a.kind === 'video') {
-      height = width * 0.58;
-    } else {
-      height = (a.h ?? 64) * scale + 24;
-    }
-
-    const right = left + width;
-    const bottom = top + height;
-    const isLeft = rawX <= 38;
-    const isRight = rawX > 38 && rawX + (a.w ?? PLATE_DEFAULT_W[a.kind]) >= 90;
-    const isCenter = !isLeft && !isRight;
-
-    return { att: a, left, top, width, height, right, bottom, isLeft, isRight, isCenter, img, vid };
-  });
-
-  // Calculate layout of text lines taking sealed obstacles into account
-  const paragraphs = htmlToParagraphs(entry.body);
-  const lineH = 36;
-  const FONT_BODY = '400 22px "Space Grotesk", sans-serif';
-  const testCanvas = document.createElement('canvas');
-  const testCtx = testCanvas.getContext('2d')!;
-  testCtx.font = FONT_BODY;
-
-  interface TextLine {
-    text: string;
-    x: number;
-    y: number;
-  }
-
-  const computedLines: TextLine[] = [];
-  let curY = bodyStartY + 30;
-
-  for (const para of paragraphs) {
-    if (!para.trim()) {
-      curY += lineH * 0.7;
-      continue;
-    }
-
-    const words = para.split(/\s+/).filter(Boolean);
-    let curLineWords: string[] = [];
-
-    const getLineConfig = (y: number) => {
-      // Find obstacles active at this vertical line position
-      const intersecting = attBoxes.filter((b) => b.att.glued && y >= b.top - 6 && y <= b.bottom + 8);
-
-      let startX = marginL;
-      let availW = contentW;
-      let nextY = y;
-
-      if (intersecting.length > 0) {
-        const rightObs = intersecting.find((b) => (b.att.x ?? 6) > 40);
-        const leftObs = intersecting.find((b) => (b.att.x ?? 6) <= 40);
-
-        if (leftObs && (leftObs.att.w ?? PLATE_DEFAULT_W[leftObs.att.kind]) > 35) {
-          // Left attachment is wide (>35%): treat as a block plate and resume text below it
-          nextY = Math.max(y, leftObs.bottom + 20);
-          startX = marginL;
-          availW = contentW;
-        } else if (leftObs && rightObs) {
-          // Obstructions on both sides: skip past
-          nextY = Math.max(leftObs.bottom, rightObs.bottom) + 20;
-          startX = marginL;
-          availW = contentW;
-        } else if (leftObs) {
-          // Left attachment is compact (<=35%): text sits on right side
-          startX = Math.max(marginL, leftObs.right + 24);
-          availW = Math.max(220, marginL + contentW - startX);
-        } else if (rightObs) {
-          // Right attachment: text stays on normal left margin and wraps before attachment
-          startX = marginL;
-          availW = Math.max(220, rightObs.left - 24 - marginL);
-        }
-      }
-
-      return { startX, availW, nextY };
-    };
-
-    const flushLine = () => {
-      if (curLineWords.length === 0) return;
-      const text = curLineWords.join(' ');
-      const cfg = getLineConfig(curY);
-      curY = cfg.nextY;
-      computedLines.push({ text, x: cfg.startX, y: curY });
-      curY += lineH;
-      curLineWords = [];
-    };
-
-    for (const w of words) {
-      const testWords = [...curLineWords, w];
-      const testStr = testWords.join(' ');
-      const cfg = getLineConfig(curY);
-
-      if (testCtx.measureText(testStr).width > cfg.availW && curLineWords.length > 0) {
-        flushLine();
-        curLineWords = [w];
-      } else {
-        curLineWords.push(w);
-      }
-    }
-    flushLine();
-  }
-
-  // Dynamic canvas height to comfortably fit all text and all attachments
-  const maxAttBottom = attBoxes.reduce((max, b) => Math.max(max, b.bottom), 0);
-  const maxTextBottom = curY;
-  const contentMaxY = Math.max(maxAttBottom, maxTextBottom);
-  const H = Math.max(1250, Math.ceil(contentMaxY + 160));
-
-  // Instantiate high-resolution canvas
-  const cv = document.createElement('canvas');
-  cv.width = W * DPR;
-  cv.height = H * DPR;
-  const g = cv.getContext('2d')!;
-  g.scale(DPR, DPR);
-
-  // Enable crisp smoothing
-  g.imageSmoothingEnabled = true;
-  g.imageSmoothingQuality = 'high';
-
-  // 1. Deep cosmic dark paper background with subtle vertical gradient
-  const bg = g.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, '#070b16');
-  bg.addColorStop(0.5, '#050811');
-  bg.addColorStop(1, '#03050a');
-  g.fillStyle = bg;
-  g.fillRect(0, 0, W, H);
-
-  // Subtle celestial nebula tint in top right
-  const m = moodOf(entry.mood);
-  const glowColor = m ? m.color : planet.palette.atmo;
-  const nebula = g.createRadialGradient(W * 0.82, 90, 10, W * 0.82, 90, 480);
-  nebula.addColorStop(0, `${glowColor}25`);
-  nebula.addColorStop(0.6, `${glowColor}08`);
-  nebula.addColorStop(1, 'transparent');
-  g.fillStyle = nebula;
-  g.fillRect(0, 0, W, H);
-
-  // Subtle scanned micro-texture weave
-  g.fillStyle = 'rgba(255, 255, 255, 0.012)';
-  for (let gx = 0; gx < W; gx += 28) {
-    g.fillRect(gx, 0, 1, H);
-  }
-  for (let gy = 0; gy < H; gy += 28) {
-    g.fillRect(0, gy, W, 1);
-  }
-
-  // Left planetary atmospheric binding spine
-  const atmoSpine = g.createLinearGradient(0, 0, 12, 0);
-  atmoSpine.addColorStop(0, planet.palette.atmo);
-  atmoSpine.addColorStop(1, `${planet.palette.atmo}20`);
-  g.fillStyle = atmoSpine;
-  g.fillRect(0, 0, 12, H);
-
-  // Archival corner registration tick marks
-  const drawCorner = (cx: number, cy: number, dx: number, dy: number) => {
-    g.strokeStyle = 'rgba(163, 184, 214, 0.35)';
-    g.lineWidth = 1.2;
-    g.beginPath();
-    g.moveTo(cx, cy + dy * 14);
-    g.lineTo(cx, cy);
-    g.lineTo(cx + dx * 14, cy);
-    g.stroke();
-  };
-  drawCorner(32, 32, 1, 1);
-  drawCorner(W - 32, 32, -1, 1);
-  drawCorner(32, H - 32, 1, -1);
-  drawCorner(W - 32, H - 32, -1, -1);
-
-  // 2. Archival Header
-  // Top micro-bar
-  g.fillStyle = 'rgba(163, 184, 214, 0.6)';
-  g.font = '600 13px "Space Mono", monospace';
-  g.fillText(
-    `✦ MY UNIVERSE ARCHIVE  ·  ${planet.name.toUpperCase()} SYSTEM  ·  ID ${entry.id.slice(0, 8).toUpperCase()}`,
-    marginL,
-    headerTop,
-  );
-
-  // Main Page Title
-  g.fillStyle = '#f2f6fc';
-  g.font = '600 42px "Unbounded", sans-serif';
-  const displayTitle = entry.title.trim() || 'Untitled Page';
-  g.fillText(displayTitle, marginL, headerTop + 58);
-
-  // Metadata Pill Strip
-  const metaY = headerTop + 104;
-  g.fillStyle = 'rgba(163, 184, 214, 0.85)';
-  g.font = '500 15px "Space Mono", monospace';
-  const dateStr = fmtDate(entry.createdAt);
-  const timeStr = new Date(entry.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
-  let metaX = marginL;
-  g.fillText(`${dateStr}  ${timeStr}`, metaX, metaY);
-  metaX += g.measureText(`${dateStr}  ${timeStr}`).width + 24;
-
-  // Weather badge
-  if (entry.weather && entry.weather !== 'clear') {
-    const wLabel = WEATHERS.find((w) => w.id === entry.weather)?.label || entry.weather;
-    g.fillStyle = 'rgba(111, 194, 180, 0.88)';
-    g.fillText(`·  ${wLabel}`, metaX, metaY);
-    metaX += g.measureText(`·  ${wLabel}`).width + 24;
-  }
-
-  // Mood badge
-  if (m) {
-    g.fillStyle = m.color;
-    g.beginPath();
-    g.arc(metaX + 5, metaY - 5, 5, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = m.color;
-    g.fillText(` ${m.label}`, metaX + 14, metaY);
-    metaX += g.measureText(` ${m.label}`).width + 24;
-  }
-
-  // Reading stats
-  const wordCount = paragraphs.join(' ').split(/\s+/).filter(Boolean).length;
-  const readMins = Math.max(1, Math.round(wordCount / 200));
-  g.fillStyle = 'rgba(139, 161, 196, 0.65)';
-  g.fillText(`·  ${wordCount} words (${readMins}m read)`, metaX, metaY);
-
-  // Tags Chips
-  if (entry.tags && entry.tags.length > 0) {
-    let tagX = marginL;
-    const tagY = headerTop + 142;
-    g.font = '600 12px "Space Mono", monospace';
-    entry.tags.forEach((tag) => {
-      const tagText = `#${tag}`;
-      const tagW = g.measureText(tagText).width + 18;
-      g.fillStyle = 'rgba(28, 39, 64, 0.6)';
-      g.strokeStyle = 'rgba(111, 194, 180, 0.35)';
-      g.lineWidth = 1;
-      g.beginPath();
-      if (typeof g.roundRect === 'function') {
-        g.roundRect(tagX, tagY - 14, tagW, 20, 4);
-      } else {
-        g.rect(tagX, tagY - 14, tagW, 20);
-      }
-      g.fill();
-      g.stroke();
-      g.fillStyle = 'rgba(111, 194, 180, 0.9)';
-      g.fillText(tagText, tagX + 9, tagY);
-      tagX += tagW + 10;
-    });
-  }
-
-  // Divider Line
-  g.strokeStyle = 'rgba(163, 184, 214, 0.18)';
-  g.lineWidth = 1;
-  g.beginPath();
-  g.moveTo(marginL, headerTop + 175);
-  g.lineTo(W - marginR, headerTop + 175);
-  g.stroke();
-
-  // 3. Render Body Text with High Contrast & Perfect Spacing
-  g.fillStyle = 'rgba(233, 238, 247, 0.95)';
-  g.font = FONT_BODY;
-  computedLines.forEach((line) => {
-    g.fillText(line.text, line.x, line.y);
-  });
-
-  // 4. Render All Attachments with Pixel Precision & High Detail
-  attBoxes.forEach((box) => {
-    const { att, left, top, width, height, right, bottom, img, vid } = box;
-    const isGlued = att.glued;
-
-    // Soft drop shadow
-    g.save();
-    g.shadowColor = 'rgba(0, 0, 0, 0.65)';
-    g.shadowBlur = 24;
-    g.shadowOffsetX = 0;
-    g.shadowOffsetY = 8;
-
-    // Card Backing Plate
-    g.fillStyle = '#0a0f1d';
-    g.beginPath();
-    if (typeof g.roundRect === 'function') {
-      g.roundRect(left, top, width, height, 8);
-    } else {
-      g.rect(left, top, width, height);
-    }
-    g.fill();
-    g.restore();
-
-    // Card Content
-    g.save();
-    g.beginPath();
-    if (typeof g.roundRect === 'function') {
-      g.roundRect(left, top, width, height, 8);
-    } else {
-      g.rect(left, top, width, height);
-    }
-    g.clip();
-
-    if (att.kind === 'image') {
-      if (img && img.naturalWidth > 0) {
-        g.drawImage(img, left, top, width, height);
-      } else {
-        g.fillStyle = '#0d1424';
-        g.fillRect(left, top, width, height);
-        g.fillStyle = 'rgba(163, 184, 214, 0.5)';
-        g.font = '14px "Space Mono", monospace';
-        g.fillText('IMAGE ATTACHMENT', left + 20, top + height / 2);
-      }
-    } else if (att.kind === 'video') {
-      if (vid) {
-        try {
-          g.drawImage(vid, left, top, width, height);
-        } catch {
-          g.fillStyle = '#0d1424';
-          g.fillRect(left, top, width, height);
-        }
-      } else {
-        g.fillStyle = '#0d1424';
-        g.fillRect(left, top, width, height);
-      }
-      // Center Glass Play Insignia
-      const cx = left + width / 2;
-      const cy = top + height / 2;
-      g.fillStyle = 'rgba(9, 13, 24, 0.75)';
-      g.strokeStyle = 'rgba(111, 194, 180, 0.6)';
-      g.lineWidth = 1.5;
-      g.beginPath();
-      g.arc(cx, cy, 26, 0, Math.PI * 2);
-      g.fill();
-      g.stroke();
-      g.fillStyle = '#6fc2b4';
-      g.beginPath();
-      g.moveTo(cx - 7, cy - 11);
-      g.lineTo(cx - 7, cy + 11);
-      g.lineTo(cx + 12, cy);
-      g.closePath();
-      g.fill();
-    } else {
-      // Audio Cassette / Waveform Card
-      const audioGrad = g.createLinearGradient(left, top, left, bottom);
-      audioGrad.addColorStop(0, '#0c1322');
-      audioGrad.addColorStop(1, '#070b14');
-      g.fillStyle = audioGrad;
-      g.fillRect(left, top, width, height);
-
-      // Play Button Circle
-      g.fillStyle = 'rgba(111, 194, 180, 0.15)';
-      g.strokeStyle = '#6fc2b4';
-      g.lineWidth = 1.5;
-      g.beginPath();
-      g.arc(left + 36, top + height / 2, 18, 0, Math.PI * 2);
-      g.fill();
-      g.stroke();
-      g.fillStyle = '#6fc2b4';
-      g.beginPath();
-      g.moveTo(left + 32, top + height / 2 - 8);
-      g.lineTo(left + 32, top + height / 2 + 8);
-      g.lineTo(left + 44, top + height / 2);
-      g.closePath();
-      g.fill();
-
-      // Synthesizer Waveform Visualizer Bars
-      const peaks = att.peaks && att.peaks.length ? att.peaks : synthBars(att.name, 36);
-      const waveStartX = left + 70;
-      const waveW = width - 90;
-      const barW = Math.max(2, (waveW - peaks.length * 3) / peaks.length);
-      const waveH = height - 28;
-
-      g.fillStyle = 'rgba(111, 194, 180, 0.75)';
-      peaks.forEach((p, k) => {
-        const bh = Math.max(4, p * waveH);
-        const bx = waveStartX + k * (barW + 3);
-        const by = top + (height - bh) / 2;
-        g.fillRect(bx, by, barW, bh);
-      });
-    }
-
-    // Top Caption/Name Gradient Scrim & Label
-    const scrim = g.createLinearGradient(left, bottom - 34, left, bottom);
-    scrim.addColorStop(0, 'rgba(4, 7, 14, 0)');
-    scrim.addColorStop(1, 'rgba(4, 7, 14, 0.92)');
-    g.fillStyle = scrim;
-    g.fillRect(left, bottom - 34, width, 34);
-
-    g.fillStyle = '#e9ecf1';
-    g.font = '500 13px "Space Mono", monospace';
-    const cleanName = att.name.length > 32 ? att.name.slice(0, 31) + '…' : att.name;
-    g.fillText(`✦ ${cleanName}`, left + 12, bottom - 11);
-
-    g.restore();
-
-    // Crisp Border
-    g.strokeStyle = isGlued ? 'rgba(111, 194, 180, 0.75)' : 'rgba(242, 193, 120, 0.85)';
-    g.lineWidth = isGlued ? 1.5 : 1.2;
-    g.beginPath();
-    if (typeof g.roundRect === 'function') {
-      g.roundRect(left, top, width, height, 8);
-    } else {
-      g.rect(left, top, width, height);
-    }
-    g.stroke();
-
-    // Archival Seal Badge on Top Right
-    const sealBadgeW = isGlued ? 88 : 96;
-    const sealBadgeH = 22;
-    const sealBadgeX = right - sealBadgeW - 8;
-    const sealBadgeY = top + 8;
-
-    g.fillStyle = isGlued ? 'rgba(8, 18, 26, 0.92)' : 'rgba(24, 18, 8, 0.92)';
-    g.strokeStyle = isGlued ? '#6fc2b4' : '#f2c178';
-    g.lineWidth = 1;
-    g.beginPath();
-    if (typeof g.roundRect === 'function') {
-      g.roundRect(sealBadgeX, sealBadgeY, sealBadgeW, sealBadgeH, 4);
-    } else {
-      g.rect(sealBadgeX, sealBadgeY, sealBadgeW, sealBadgeH);
-    }
-    g.fill();
-    g.stroke();
-
-    g.fillStyle = isGlued ? '#6fc2b4' : '#f2c178';
-    g.font = '700 10.5px "Space Mono", monospace';
-    g.fillText(isGlued ? '✦ SEALED' : '◇ UNSEALED', sealBadgeX + 9, sealBadgeY + 15);
-  });
-
-  // 5. Document Archival Footer
-  const footerY = H - 56;
-  g.strokeStyle = 'rgba(163, 184, 214, 0.15)';
-  g.lineWidth = 1;
-  g.beginPath();
-  g.moveTo(marginL, footerY - 24);
-  g.lineTo(W - marginR, footerY - 24);
-  g.stroke();
-
-  g.fillStyle = 'rgba(163, 184, 214, 0.55)';
-  g.font = '500 13px "Space Mono", monospace';
-  g.fillText('MY UNIVERSE · ARCHIVAL COSMIC SCAN · DOCUMENT INTEGRITY VERIFIED', marginL, footerY);
-
-  g.fillStyle = 'rgba(163, 184, 214, 0.4)';
-  g.fillText(`RECORD ID: ${entry.id}  ·  PLANET: ${planet.name.toUpperCase()}`, marginL, footerY + 22);
-
-  // Trigger high-precision PNG download
-  cv.toBlob(
-    (b) => {
-      if (!b) {
-        toast('could not render the document', 'warn');
-        return;
-      }
-      const url = URL.createObjectURL(b);
-      const a = document.createElement('a');
-      a.href = url;
-      const sanitizedPlanet = planet.name.replace(/[^\w\- ]+/g, '').trim();
-      const sanitizedTitle = entry.title.replace(/[^\w\- ]+/g, '').trim() || 'page';
-      a.download = `${sanitizedPlanet}_${sanitizedTitle}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 6000);
-      toast(
-        `document exported — high-precision scan with ${atts.length ? atts.length + ' attachment' + (atts.length > 1 ? 's' : '') : 'text'}`
-      );
-    },
-    'image/png',
-    1.0,
-  );
-}
 
 const TONES: { id: string; label: string; css: string }[] = [
   { id: '', label: 'original', css: 'none' },
@@ -775,11 +225,14 @@ const GluedPage = memo(function GluedPage({
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  /* the plates' actual positioning context — %-based x/w must be measured
+     against this, not the padded window root (they lagged ~12% before) */
+  const platesRef = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
   const [selId, setSelId] = useState<string | null>(null);
-  const [cropId, setCropId] = useState<string | null>(null);
-  const [dragState, setDragState] = useState<{ id: string; mode: 'move' | 'resize'; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [dragState, setDragState] = useState<{ id: string; kind: Attachment['kind']; mode: 'move' | 'resize'; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number } | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -819,6 +272,16 @@ const GluedPage = memo(function GluedPage({
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(saveText, 550);
   };
+
+  /* flush pending debounced text when the page unmounts — closing a window
+     must never eat the last keystrokes */
+  useEffect(() => () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      saveText();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const syncTextSpacers = useCallback(() => {
     const textEl = bodyRef.current;
@@ -953,6 +416,7 @@ const GluedPage = memo(function GluedPage({
     setSelId(a.id);
     setDragState({
       id: a.id,
+      kind: a.kind,
       mode,
       startX: e.clientX,
       startY: e.clientY,
@@ -964,8 +428,8 @@ const GluedPage = memo(function GluedPage({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!dragState || !containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    if (!dragState) return;
+    const rect = (platesRef.current ?? containerRef.current)!.getBoundingClientRect();
     const dx = ((e.clientX - dragState.startX) / rect.width) * 100;
     const dy = e.clientY - dragState.startY;
 
@@ -974,9 +438,14 @@ const GluedPage = memo(function GluedPage({
       const newY = Math.max(0, dragState.origY + dy);
       actions.updateAttachment(entry.id, dragState.id, { x: newX, y: newY });
     } else {
-      const newW = Math.max(20, Math.min(100, dragState.origW + dx));
-      const newH = Math.max(40, dragState.origH + dy);
-      actions.updateAttachment(entry.id, dragState.id, { w: newW, h: newH });
+      const newW = Math.max(15, Math.min(100, dragState.origW + dx));
+      /* h only constrains media that respects it (audio console, image/video
+         cap) — for text-flow kinds it was a silent no-op */
+      const patch: Partial<Attachment> = { w: newW };
+      if (dragState.kind === 'audio' || dragState.kind === 'image' || dragState.kind === 'video') {
+        patch.h = Math.max(56, dragState.origH + dy);
+      }
+      actions.updateAttachment(entry.id, dragState.id, patch);
     }
   };
 
@@ -1004,7 +473,12 @@ const GluedPage = memo(function GluedPage({
     toast(`${t.label} formed`);
   };
 
-  const cropEntry = cropId ? atts.find((a) => a.id === cropId) ?? null : null;
+  const editingAtt = editingId ? atts.find((a) => a.id === editingId) ?? null : null;
+  /* resolve the editor's image through the same loader the plates use —
+     big photos are offloaded to OPFS/IndexedDB and have an empty dataUrl */
+  const editingSrc = useAttachmentSource(editingAtt ?? {
+    id: '__editor_none__', kind: 'image', name: '', dataUrl: '',
+  });
 
   return (
     <div
@@ -1096,7 +570,7 @@ const GluedPage = memo(function GluedPage({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       >
-        <div className="relative min-h-125">
+        <div className="relative min-h-125" ref={platesRef}>
           <div
             ref={bodyRef}
             contentEditable
@@ -1117,7 +591,11 @@ const GluedPage = memo(function GluedPage({
                 top: `${a.y ?? 48}px`,
                 width: `${a.w ?? PLATE_DEFAULT_W[a.kind]}%`,
                 height: a.kind === 'audio' ? `${a.h ?? 64}px` : 'auto',
+                /* h caps media height — vertical resize now visually works */
+                maxHeight: (a.kind === 'image' || a.kind === 'video') && a.h ? `${a.h}px` : undefined,
+                overflow: 'hidden',
                 filter: a.kind === 'image' && a.tone ? toneCss(a.tone) : 'none',
+                transform: a.tilt ? 'rotate(-1.8deg)' : undefined,
               };
 
               return (
@@ -1162,8 +640,59 @@ const GluedPage = memo(function GluedPage({
                   </div>
 
                   <div className="flex items-center justify-between gap-1 mt-1 px-1 py-0.5 bg-void/80 rounded border border-line/30 text-[9px] font-mono">
-                    <span className="truncate text-slate-dim max-w-25">{a.name}</span>
-                    <div className="flex items-center gap-1">
+                    <span className="truncate text-slate-dim max-w-25" title={a.name}>{a.name}</span>
+                    <div className="flex items-center gap-0.5">
+                      {a.kind === 'image' && (
+                        <button
+                          title="open editor — crop · resize · rotate · flip · filters"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            sfxTick();
+                            if (a.isGif) toast('editing keeps only the GIF\'s first frame — it becomes a photo', 'warn');
+                            setEditingId(a.id);
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-teal-ice/15 text-teal-ice hover:bg-teal-ice/30"
+                        >
+                          ✎ edit
+                        </button>
+                      )}
+                      <button
+                        title={`tone: ${a.tone || 'original'} — click to cycle`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const idx = TONES.findIndex((t) => t.id === (a.tone ?? ''));
+                          const next = TONES[(idx + 1) % TONES.length];
+                          actions.updateAttachment(entry.id, a.id, { tone: next.id || undefined });
+                          sfxTick();
+                        }}
+                        className={`px-1.5 py-0.5 rounded ${a.tone ? 'bg-solar/20 text-solar' : 'bg-white/5 text-slate-dim hover:text-paper'}`}
+                      >
+                        ◐ {a.tone || 'original'}
+                      </button>
+                      <button
+                        title="tilt the plate"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          actions.updateAttachment(entry.id, a.id, { tilt: !a.tilt });
+                          sfxTick();
+                        }}
+                        className={`px-1.5 py-0.5 rounded ${a.tilt ? 'bg-solar/20 text-solar' : 'bg-white/5 text-slate-dim hover:text-paper'}`}
+                      >
+                        ⤡
+                      </button>
+                      <button
+                        title="cycle size — S · M · L"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const cur = a.w ?? PLATE_DEFAULT_W[a.kind];
+                          const next = cur < 40 ? 55 : cur < 68 ? 78 : 32;
+                          actions.updateAttachment(entry.id, a.id, { w: next, h: a.kind === 'audio' ? a.h : undefined });
+                          sfxTick();
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-white/5 text-slate-dim hover:text-paper"
+                      >
+                        ⤢
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1171,9 +700,10 @@ const GluedPage = memo(function GluedPage({
                         }}
                         className={`px-1.5 py-0.5 rounded ${a.glued ? 'bg-teal-ice/20 text-teal-ice' : 'bg-solar/20 text-solar'}`}
                       >
-                        {a.glued ? 'sealed' : 'unsealed'}
+                        {a.glued ? 'sealed' : 'free'}
                       </button>
                       <button
+                        title="remove attachment"
                         onClick={(e) => {
                           e.stopPropagation();
                           actions.deleteAttachment(entry.id, a.id);
@@ -1208,9 +738,9 @@ const GluedPage = memo(function GluedPage({
           ))}
           <TagInput entryId={entry.id} tags={entry.tags} />
         </div>
-        <span className="font-mono text-[7px] tracking-[0.2em] uppercase text-slate-dim/40 shrink-0">
-          glue·v7-cavity
-        </span>
+          <span className="font-mono text-[7px] tracking-[0.2em] uppercase text-slate-dim/40 shrink-0">
+            drag · resize · edit
+          </span>
         <div className="relative flex items-center gap-2 shrink-0">
           <div className="relative">
             <button
@@ -1234,11 +764,11 @@ const GluedPage = memo(function GluedPage({
                 <button
                   disabled={isExporting}
                   onClick={async () => {
+                    setShowExportMenu(false);
                     setIsExporting(true);
                     sfxTick();
                     await exportDiaryDocumentLazy(entry, planet, containerRef.current, { format: 'pdf', quality: 'ultra' });
                     setIsExporting(false);
-                    setShowExportMenu(false);
                   }}
                   className="flex items-start gap-2 p-1.5 rounded hover:bg-void/80 text-left transition-colors border border-transparent hover:border-teal-ice/20 group"
                 >
@@ -1252,11 +782,11 @@ const GluedPage = memo(function GluedPage({
                 <button
                   disabled={isExporting}
                   onClick={async () => {
+                    setShowExportMenu(false);
                     setIsExporting(true);
                     sfxTick();
                     await exportDiaryDocumentLazy(entry, planet, containerRef.current, { format: 'png', quality: 'master' });
                     setIsExporting(false);
-                    setShowExportMenu(false);
                   }}
                   className="flex items-start gap-2 p-1.5 rounded hover:bg-void/80 text-left transition-colors border border-transparent hover:border-solar/20 group"
                 >
@@ -1270,11 +800,11 @@ const GluedPage = memo(function GluedPage({
                 <button
                   disabled={isExporting}
                   onClick={async () => {
+                    setShowExportMenu(false);
                     setIsExporting(true);
                     sfxTick();
                     await exportDiaryDocumentLazy(entry, planet, containerRef.current, { format: 'print' });
                     setIsExporting(false);
-                    setShowExportMenu(false);
                   }}
                   className="flex items-start gap-2 p-1.5 rounded hover:bg-void/80 text-left transition-colors border border-transparent hover:border-line/40 group"
                 >
@@ -1330,6 +860,27 @@ const GluedPage = memo(function GluedPage({
           </button>
         </div>
       </div>
+
+      {editingAtt && (
+        <AttachmentEditor
+          name={editingAtt.name}
+          src={editingSrc}
+          onCancel={() => setEditingId(null)}
+          onApply={(dataUrl) => {
+            /* the old offloaded payload becomes an orphan — remove it */
+            if (editingAtt.payloadRef) void delLocalPayload(editingAtt.payloadRef);
+            actions.updateAttachment(entry.id, editingAtt.id, {
+              dataUrl,
+              payloadRef: undefined,
+              payloadMissing: undefined,
+              isGif: undefined,
+            });
+            setEditingId(null);
+            setTimeout(syncTextSpacers, 30);
+            toast('edit applied to attachment');
+          }}
+        />
+      )}
     </div>
   );
 });
@@ -1440,7 +991,8 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
     let list = allEntries.filter((e) => (darkSide ? e.archived : !e.archived));
     if (q.trim()) {
       const s = q.trim().toLowerCase();
-      list = list.filter((e) => e.title.toLowerCase().includes(s) || e.body.toLowerCase().includes(s) || e.tags.some((t) => t.includes(s)));
+      /* search the rendered text, not the HTML source — "div" used to match everything */
+      list = list.filter((e) => e.title.toLowerCase().includes(s) || htmlToText(e.body).toLowerCase().includes(s) || e.tags.some((t) => t.includes(s)));
     }
     return [...list].sort((a, b) => a.createdAt - b.createdAt);
   }, [allEntries, q, darkSide]);
@@ -1449,7 +1001,7 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
     if (!q.trim()) return [];
     const s = q.trim().toLowerCase();
     return state.entries
-      .filter((e) => e.planetId !== planet.id && (e.title.toLowerCase().includes(s) || e.body.toLowerCase().includes(s)))
+      .filter((e) => e.planetId !== planet.id && (e.title.toLowerCase().includes(s) || htmlToText(e.body).toLowerCase().includes(s)))
       .slice(0, 6);
   }, [q, state.entries, planet.id]);
 
@@ -1467,6 +1019,7 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
 
   const addPage = () => {
     setQ('');
+    setDarkSide(false);
     actions.addEntry(planet.id);
     toast(`new page formed on ${planet.name}`);
     setTimeout(() => setPage(entries.length), 60);
@@ -1478,7 +1031,7 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
       setRecording(false);
       if (res) {
         let target = currentEntry;
-        if (!target) { target = actions.addEntry(planet.id); setPage(entries.length); }
+        if (!target) { setQ(''); setDarkSide(false); target = actions.addEntry(planet.id); setPage(allEntries.length); }
         actions.addAttachment(target.id, { kind: 'audio', name: 'voice memo', dataUrl: res.dataUrl, peaks: res.peaks, duration: res.duration });
         toast('voice memo glued to the page — drag it where you want it');
       }
@@ -1490,16 +1043,28 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
     toast('recording — the planet is listening');
   };
 
+  /* release the mic if the window closes mid-recording */
+  useEffect(() => () => { void stopRecording(); }, []);
+
   const onMediaAttach = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       if (!f) continue;
 
+      /* one honest guard for every branch — 80MB of base64 inside the state
+         tree is ~107MB of string and stalls persistence */
+      if (f.size > 80 * 1024 * 1024) {
+        toast(`${f.name} exceeds 80MB — too heavy to glue into a page`, 'warn');
+        continue;
+      }
+
       let target = currentEntry;
       if (!target) {
+        setQ('');
+        setDarkSide(false);
         target = actions.addEntry(planet.id);
-        setPage(entries.length);
+        setPage(allEntries.length);
       }
 
       // 1. Audio files (mp3, wav, ogg, m4a, flac, aac)
@@ -1529,10 +1094,6 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
       // 2. Video files (mp4, webm, mov, ogg, mkv)
       else if (f.type.startsWith('video/') || f.name.match(/\.(mp4|webm|mov|ogg|mkv)$/i)) {
         try {
-          if (f.size > 80 * 1024 * 1024) {
-            toast('video exceeds 80MB — select a shorter clip to glue', 'warn');
-            continue;
-          }
           const dataUrl = await readAsDataURL(f);
           actions.addAttachment(target.id, {
             kind: 'video',
@@ -1564,19 +1125,32 @@ export default function DiaryWindow({ planet, rect, maximized, focused, onFocus,
         const img = new Image();
         const url = URL.createObjectURL(f);
         img.onload = () => {
-          const scale = Math.min(1, 1400 / Math.max(img.width, img.height));
-          const cv = document.createElement('canvas');
-          cv.width = Math.round(img.width * scale);
-          cv.height = Math.round(img.height * scale);
-          cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
-          const dataUrl = cv.toDataURL('image/jpeg', 0.90);
-          actions.addAttachment(target!.id, {
-            kind: 'image',
-            name: f.name,
-            dataUrl,
-            size: f.size,
-          });
-          toast(`photo glued to page`);
+          try {
+            /* dimension-less SVGs report 0 — fall back to a sane canvas size */
+            const maxDim = Math.max(img.width, img.height) || 1024;
+            const scale = Math.min(1, 1400 / maxDim);
+            const cv = document.createElement('canvas');
+            cv.width = Math.max(1, Math.round(img.width * scale));
+            cv.height = Math.max(1, Math.round(img.height * scale));
+            cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
+            /* keep PNG transparency instead of painting black backgrounds */
+            const keepAlpha = f.type === 'image/png' || f.type === 'image/webp';
+            const dataUrl = cv.toDataURL(keepAlpha ? 'image/png' : 'image/jpeg', 0.90);
+            actions.addAttachment(target!.id, {
+              kind: 'image',
+              name: f.name,
+              dataUrl,
+              size: f.size,
+            });
+            toast('photo glued to page');
+          } catch {
+            toast('failed to read image attachment', 'warn');
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        };
+        img.onerror = () => {
+          toast('failed to read image attachment', 'warn');
           URL.revokeObjectURL(url);
         };
         img.src = url;
