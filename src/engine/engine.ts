@@ -38,7 +38,7 @@ import { isDesktop } from '../platform/desktop/adapter';
 import { ensureSkyFor, getActiveSkySpec, type ActiveSkySpec } from '../platform/sky/skyRegistry';
 import { MOOD_HEX, type AuroraSignal, type EchoEntry } from '../platform/sentiment/sentiment';
 import {
-  WEB_CEILING,
+  WEB_CEILING, WEB_EDGE_TRIGGER, WARP_ZOOM_VEL,
   MULTIVERSE_FLOOR_CLAMP, MULTIVERSE_FLOOR_RETURN, RETURN_ZOOM_VEL, REALITY_FLOOR,
 } from './systems/stageThresholds';
 import { SCALE_BANDS, highScaleLabel } from './systems/levelSystem';
@@ -5254,7 +5254,10 @@ void main(){
          by explicit actions. */
       if (this.cosmicStage === 'web') {
         if (this.rig.tZoomT > WEB_CEILING) this.rig.setZoomTarget(WEB_CEILING);
-        const pushing = this.rig.tZoomT > WEB_CEILING - 0.004 && this.rig.zoomVelocity > 0.02;
+        /* R68 — the crossing is DELIBERATE: dial at the edge AND a strong
+           outward wheel push (WARP_ZOOM_VEL). Plain exploration under the
+           ceiling — even fast scrolling — stays inside the stage. */
+        const pushing = this.rig.tZoomT > WEB_EDGE_TRIGGER && this.rig.zoomVelocity > WARP_ZOOM_VEL;
         this.membraneShimmer += ((pushing ? 0.16 : 0) - this.membraneShimmer) * Math.min(1, dt * 5);
         /* pushed through the web's ceiling — the crossing IS a Kamui: the
            tear opens at the center of the cosmic web and the fold carries
@@ -5277,8 +5280,9 @@ void main(){
           this.grabCooldown = 0.6;
         }
         if (this.rig.tZoomT < MULTIVERSE_FLOOR_CLAMP) this.rig.setZoomTarget(MULTIVERSE_FLOOR_CLAMP);
-        /* pushed through the multiverse's floor — the dial carries you back
-           out into the web (this crossing IS a Kamui) */
+        /* pushed through the multiverse's floor with a DELIBERATE inward
+           push — the dial carries you back out into the web (this crossing
+           IS a Kamui); plain exploration above the floor stays. */
         if (
           this.rig.tZoomT <= MULTIVERSE_FLOOR_RETURN && this.rig.zoomVelocity < RETURN_ZOOM_VEL && this.grabCooldown <= 0
           && !this.dragging && this.portal.phase === 'idle'
