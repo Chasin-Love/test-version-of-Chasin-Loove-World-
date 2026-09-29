@@ -143,9 +143,9 @@ const phaseSrc = readFileSync(new URL('../src/engine/systems/kamuiPhases.ts', im
 {
   const phases = /export type PortalPhase =/.test(phaseSrc)
     && /KAMUI_PHASE_WEIGHTS/.test(phaseSrc)
-    && /KAMUI_TRIGGER_DURATION = 5\.5/.test(phaseSrc)
+    && /KAMUI_TRIGGER_DURATION = 3\.5/.test(phaseSrc) /* R69 — the snappier summon */
     && /KAMUI_REVERSE_DURATION = 1\.9/.test(phaseSrc)
-    && /KAMUI_VACUUM_WINDOW = 1\.5/.test(phaseSrc)
+    && /KAMUI_VACUUM_WINDOW = 0\.95/.test(phaseSrc)
     && /KAMUI_BEATS: KamuiBeat\[\]/.test(phaseSrc)
     && /export function kamuiBeatEase/.test(phaseSrc)
     && !/KamuiPhase/.test(phaseSrc)
@@ -155,7 +155,7 @@ const phaseSrc = readFileSync(new URL('../src/engine/systems/kamuiPhases.ts', im
 
 /* ==== 6. CAMERA STABILITY — the summon holds the frame ==== */
 {
-  const armed = /export const KAMUI_ENTRY_HOLD = 5\.5;/.test(phaseSrc)
+  const armed = /export const KAMUI_ENTRY_HOLD = 3\.5;/.test(phaseSrc)
     && /export const KAMUI_ENTRY_FRAMING = 4\.2;/.test(phaseSrc)
     && /private portalHold = 0;/.test(engSrc)
     && /private portalFocusPending = false;/.test(engSrc)

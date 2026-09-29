@@ -5641,8 +5641,10 @@ this.updateBodies(dt);
     pu.uWind.value = forwardSummon
       ? THREE.MathUtils.smoothstep(beatElapsed, 0.35, 2.55) /* winds up once and STAYS — no unwind */
       : 0;
-    pu.uPulse.value = forwardSummon && beatElapsed >= 1.75 && beatElapsed <= 2.75
-      ? Math.abs(Math.sin(((beatElapsed - 1.75) / 1.0) * Math.PI * 2))
+    /* R69 — the void-flicker pulse rides the compressed beat table: the old
+       fixed 1.75–2.75 s window outlived the shorter summon */
+    pu.uPulse.value = forwardSummon && beatElapsed >= 1.1 && beatElapsed <= 1.75
+      ? Math.abs(Math.sin(((beatElapsed - 1.1) / 0.65) * Math.PI * 2))
       : 0;
     if (this.kamuiTimer > 0 && this.resolveKamuiSource(this._vScratch4)) {
       this._vScratch4.project(this.camera);

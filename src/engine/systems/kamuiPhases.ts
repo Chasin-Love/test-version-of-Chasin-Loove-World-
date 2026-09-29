@@ -24,8 +24,15 @@ export const KAMUI_PHASE_WEIGHTS: Record<PortalPhase, number> = {
 };
 
 /** The v1 vortex envelope: one slow sin breath over KAMUI_TRIGGER_DURATION
-    seconds (rise → crest → fall), so the summon can actually be watched. */
-export const KAMUI_TRIGGER_DURATION = 5.5; /* seconds */
+    seconds (rise → crest → fall), so the summon can actually be watched.
+
+    R69 — THE SNAPPier SUMMON: the traveler's verdict on the R67 handoff —
+    the FINAL stage (the throat/vacuum stabilization) dragged and read as
+    lag. The whole choreography is compressed 5.5 s → 3.5 s (−2 s, the user's
+    own bound): every beat keeps its relative shape and the swallow stays
+    theatrical, but the summon no outstays its welcome. The beat table below
+    is the compression — recompute the spans, never slow one motion. */
+export const KAMUI_TRIGGER_DURATION = 3.5; /* seconds */
 
 /** THE EJECT (the reverse/return tear) has its own, shorter life: ~0.6s at
     full burst while the open overlay is swallowed (kamui-suck), then the
@@ -45,11 +52,11 @@ export const KAMUI_RAMP: string[] = ['#ff1744', '#8b5cf6', '#f2c178'];
 export interface KamuiBeat { kind: 'tear' | 'wind' | 'flicker' | 'deepen' | 'throat'; t0: number; t1: number; peak: number }
 
 export const KAMUI_BEATS: KamuiBeat[] = [
-  { kind: 'tear',    t0: 0.0,  t1: 0.95, peak: 1.0 },
-  { kind: 'wind',    t0: 0.35, t1: 2.05, peak: 0.62 },
-  { kind: 'flicker', t0: 1.45, t1: 3.05, peak: 0.7 },
-  { kind: 'deepen',  t0: 2.55, t1: 4.35, peak: 0.85 },
-  { kind: 'throat',  t0: 3.7,  t1: 5.5,  peak: 1.0 },
+  { kind: 'tear',    t0: 0.0,  t1: 0.6,  peak: 1.0 },
+  { kind: 'wind',    t0: 0.22, t1: 1.3,  peak: 0.62 },
+  { kind: 'flicker', t0: 0.92, t1: 1.95, peak: 0.7 },
+  { kind: 'deepen',  t0: 1.63, t1: 2.77, peak: 0.85 },
+  { kind: 'throat',  t0: 2.35, t1: 3.5,  peak: 1.0 },
 ];
 
 /* The spans OVERLAP on purpose: the max of neighboring bumps never dips to
@@ -72,7 +79,7 @@ export function kamuiBeatEase(elapsed: number, beat: KamuiBeat): number {
  * rumbles — the universe briefly unstable at the instant the tunnel
  * finishes, like a vacuum ripping its subject in.
  */
-export const KAMUI_VACUUM_WINDOW = 1.5; /* seconds */
+export const KAMUI_VACUUM_WINDOW = 0.95; /* seconds */
 
 /**
  * CAMERA STABILITY — the summon hold.
@@ -86,7 +93,7 @@ export const KAMUI_VACUUM_WINDOW = 1.5; /* seconds */
  * long, and only then hands the focus and the dive to the rig — through the
  * crest, into the fall, so the arrival still feels like falling through it.
  */
-export const KAMUI_ENTRY_HOLD = 5.5; /* seconds — the whole choreography plays on a locked frame; the dive begins as the throat completes */
+export const KAMUI_ENTRY_HOLD = 3.5; /* seconds — the whole choreography plays on a locked frame; the dive begins as the throat completes */
 
 /** The arrival framing, as a multiple of the body's radius. The old 3.2 put
     the camera almost on the surface by the time the overlay opened; 4.2 keeps
