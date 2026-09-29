@@ -3933,17 +3933,19 @@ void main(){
         if (this.dragging) { this.dragging = false; this.rig.endDrag(); }
       }
     }
-    /* R68 — THE EXPLORER'S HAND. A plain left-drag now GLIDES (drifts the
-       view across the field); it becomes an orbit turn only when a body is
-       under the pointer (rotation is pointless over empty web, natural
-       around a world). Middle/right/Shift still pan explicitly as before.
-       The traveler can now always both move AND turn, without a modifier. */
+    /* R69 — THE ORBIT IS RESTORED. The traveler's verdict: swinging the
+       camera's ANGLE is how a hidden hole is found (0° → 30° → 270°) —
+       rotation is a first-class gesture EVERYWHERE, never orphaned over
+       empty space. So plain left-drag orbits again (the pre-R68 behavior);
+       the glide survives as its joined partner on Ctrl+drag, and
+       middle/right/Shift still pan. Move, turn, glide — all first-class. */
     const pan = e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey);
-    const orbit = !pan && e.button === 0 && this.pick() !== null;
+    const glide = e.button === 0 && !pan && e.ctrlKey;
+    const orbit = !pan && !glide;
     if (e.button === 0 || pan) {
       try { this.canvas.setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
       this.dragging = true;
-      this.rig.beginDrag(pan, orbit); /* pan (explicit) or orbit (over a body); otherwise GLIDE */
+      this.rig.beginDrag(pan, orbit); /* pan (explicit), orbit (default), or glide (Ctrl) */
       this.lastPX = e.clientX; this.lastPY = e.clientY;
       this.downX = e.clientX; this.downY = e.clientY; this.downT = performance.now();
     }
