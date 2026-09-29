@@ -1087,6 +1087,8 @@ button { font-family: inherit; }
 .demon-eye-spin {
   animation: demonEyeWarp 6s linear infinite;
 }
+
+
 .fx-panel { position: relative; }
 .fx-panel::before, .fx-panel::after {
   content: ''; position: absolute; width: 14px; height: 14px; pointer-events: none;
@@ -1811,5 +1813,24 @@ input[type='range'].pw-range::-webkit-slider-thumb {
 
 .demon-eye-spin {
   animation: demonEyeWarp 6s linear infinite;
+}
+
+/* R68 — THE TOUCH VISITOR: on coarse pointers the hover cards' action
+   buttons grow to finger-sized hit targets (the mouse-size py-1 rows are
+   ~24px tall — under half the recommended minimum). One rule, all cards,
+   zero component churn; a mouse keeps the compact size. */
+@media (pointer: coarse) {
+  .fixed button[class*="pointer-events-auto"],
+  .fixed button[class*="py-1"],
+  .fixed button[class*="py-1.5"] {
+    min-height: 44px;
+    min-width: 44px;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+  /* every interactive element gets a visible press response on touch */
+  .fixed button[class*="pointer-events-auto"]:active {
+    filter: brightness(1.5);
+  }
 }
 
