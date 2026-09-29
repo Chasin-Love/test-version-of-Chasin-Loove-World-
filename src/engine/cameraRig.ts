@@ -44,6 +44,26 @@ const FLING_PX_CAP = 2600; /* px/s — fastest flick the rig believes */
 const ORBIT_FLING_CAP = 2.2; /* rad/s */
 const PAN_FLING_FACTOR = 2.2; /* × distance per second */
 
+/* R68 — THE EXPLORER'S ZOOM. The old wheel could only change the distance
+   to ONE center: pointing at the right side of the cosmic web and diving
+   still flew into the middle. The cursor-anchored dive walks the orbit
+   center toward whatever the wheel ray touches, so the traveler travels to
+   what they look at — the free-flight exploring law (Google-Earth grammar).
+   AIM_SHARE_PER_DIAL: share of the remaining gap covered per unit of dive
+   (ΔzoomT); AIM_MAX_SHARE caps one frame's step so a spike can never teleport
+   the center; the free-flight PAN_LEASH scales the pan offset limit by
+   altitude so a drift at web scale can actually cross the web. */
+const AIM_SHARE_PER_DIAL = 3.2;
+const AIM_MAX_SHARE = 0.3;
+const PAN_LEASH_FREE = 3.0; /* × distance, unfocused flight (was 1.2 everywhere) */
+
+/** The engine's ray knowledge, probed by the rig mid-dive: resolves the
+    wheel ray to a world point (the body/galaxy/bubble under the cursor, or
+    a bounded point down the ray through empty field). */
+export interface AimProbe {
+  (ndcX: number, ndcY: number, out: THREE.Vector3): boolean;
+}
+
 export interface RigFrame {
   /** world-space point the camera orbits this frame (body position or origin) */
   focus: THREE.Vector3;
@@ -102,11 +122,23 @@ export class CameraRig {
   private dragVX = 0;
   private dragVY = 0;
   private lastMoveT = 0;
+  /* R68 — a left-drag over a body turns the orbit instead of gliding */
+  private orbitArmed = false;
 
   /* touch pinch state */
   private pinchD = 0;
   private pinchX = 0;
   private pinchY = 0;
+
+  /* R68 — the cursor-anchored dive: the engine installs a ray resolver and
+     the wheel arms it while the dial is heading inward */
+  private aimProbe: AimProbe | null = null;
+  private aimNdcX = 0;
+  private aimNdcY = 0;
+  private aimArmed = false;
+  private aimPoint = new THREE.Vector3();
+  private aimCenter = new THREE.Vector3();
+  private aimGap = new THREE.Vector3();
 
   private canvas: HTMLCanvasElement;
 
@@ -136,6 +168,13 @@ export class CameraRig {
     /* impulse → velocity: one notch settles to ΔzoomT ≈ WHEEL_ZOOM_PER_UNIT·d
        with the same glide envelope at every scale */
     this.zoomVel += d * WHEEL_ZOOM_PER_UNIT * ZOOM_FRICTION;
+    /* R68 — an inward impulse arms the cursor-anchored dive at THIS screen
+       position (the outward roll never steals the center) */
+    if (this.zoomVel < 0) {
+      this.aimNdcX = (e.clientX / window.innerWidth) * 2 - 1;
+      this.aimNdcY = -(e.clientY / window.innerHeight) * 2 + 1;
+      this.aimArmed = true;
+    }
   };
 
   private onTouchStart = (e: TouchEvent) => {
@@ -161,13 +200,21 @@ export class CameraRig {
     this.pinchX = mx; this.pinchY = my;
   };
 
-  beginDrag(pan: boolean) {
+  /** R68 — THE GLIDE GRAMMAR: a plain left-drag drifts the view across the
+      field (the exploring hand); `orbit` arms a turn ONLY when the drag
+      began over a body (rotation is pointless over empty web, natural
+      around a world). Explicit pan (middle/right/Shift) is unchanged. */
+  beginDrag(pan: boolean, orbit = false) {
     this.dragging = true;
     this.panning = pan;
+    this.orbitArmed = orbit;
     this.dragVX = 0; this.dragVY = 0;
     this.lastMoveT = performance.now();
     this.orbitVX = 0; this.orbitVY = 0; this.panVel.set(0, 0, 0);
   }
+
+  /** true while the current drag is a glide (unarmed left-drag) */
+  get gliding(): boolean { return this.dragging && !this.panning && !this.orbitArmed; }
 
   dragMove(dx: number, dy: number) {
     if (!this.dragging) return;
@@ -177,7 +224,7 @@ export class CameraRig {
     const a = 0.6; /* EMA weight for velocity tracking */
     const vx = clamp(dx / dt, -FLING_PX_CAP, FLING_PX_CAP);
     const vy = clamp(dy / dt, -FLING_PX_CAP, FLING_PX_CAP);
-    if (this.panning) {
+    if (this.panning || this.gliding) {
       this.panBy(dx, dy);
       this.dragVX = a * this.dragVX + (1 - a) * vx;
       this.dragVY = a * this.dragVY + (1 - a) * vy;
@@ -192,7 +239,7 @@ export class CameraRig {
   endDrag() {
     if (!this.dragging) return;
     this.dragging = false;
-    if (this.panning) {
+    if (this.panning || this.gliding) {
       /* fling along the averaged screen motion, scaled like a pan step */
       this.panRight.setFromMatrixColumn(this.camera.matrixWorld, 0);
       this.panUp.setFromMatrixColumn(this.camera.matrixWorld, 1);
@@ -206,7 +253,16 @@ export class CameraRig {
       this.orbitVY = clamp(this.dragVY * ORBIT_SENSITIVITY, -ORBIT_FLING_CAP, ORBIT_FLING_CAP);
     }
     this.panning = false;
+    this.orbitArmed = false;
     this.dragVX = 0; this.dragVY = 0;
+  }
+
+  /** R68 — the pan leash by flight mode: a focused body keeps its tight
+     orbit leash (the frame is the subject), but FREE flight can drift 3×
+     its altitude — reaching the far side of a structure is now a drift,
+     not a fight against the clamp. */
+  private panLeash(): number {
+    return Math.max(60, this.dist() * (this.focused ? 1.2 : PAN_LEASH_FREE));
   }
 
   private panBy(dx: number, dy: number) {
@@ -214,11 +270,16 @@ export class CameraRig {
     this.panRight.setFromMatrixColumn(this.camera.matrixWorld, 0);
     this.panUp.setFromMatrixColumn(this.camera.matrixWorld, 1);
     this.panOffset.addScaledVector(this.panRight, -dx * k).addScaledVector(this.panUp, dy * k);
-    const maxPan = Math.max(60, this.dist() * 1.2);
+    const maxPan = this.panLeash();
     if (this.panOffset.length() > maxPan) this.panOffset.setLength(maxPan);
   }
 
   /* ------------------------------- state API ------------------------------ */
+
+  /** R68 — install (or clear) the ray resolver the cursor-anchored dive
+      consults while the wheel is diving. The engine owns the raycast; the
+      rig only walks the center toward the resolved point. */
+  setAimProbe(probe: AimProbe | null) { this.aimProbe = probe; }
 
   setZoomTarget(z: number) { this.tZoomT = clamp(z, 0, 1); }
   nudgeZoom(delta: number) { this.tZoomT = clamp(this.tZoomT + delta, 0, 1); }
@@ -328,7 +389,7 @@ export class CameraRig {
       }
       if (this.panVel.lengthSq() > 1e-8) {
         this.panOffset.addScaledVector(this.panVel, dt);
-        const maxPan = Math.max(60, this.dist() * 1.2);
+        const maxPan = this.panLeash();
         if (this.panOffset.length() > maxPan) this.panOffset.setLength(maxPan);
         this.panVel.multiplyScalar(Math.exp(-PAN_FRICTION * dt));
       }
@@ -340,6 +401,25 @@ export class CameraRig {
       this.zoomVel *= Math.exp(-ZOOM_FRICTION * dt);
     }
 
+    /* R68 — THE CURSOR-ANCHORED DIVE. While a wheel dive is live and the
+       flight is free (no focus owns the framing), the orbit center walks
+       toward what the wheel ray touches: dive at the right side of the
+       cosmic web and you ARRIVE there, instead of flying into the middle.
+       The share is proportional to the live dive rate, so a deep scroll
+       travels further than a cautious one, and the whole effect dies with
+       the momentum — a resting dial never drifts the center. */
+    if (this.aimArmed && this.aimProbe && !this.dragging && !s.focused && this.zoomVel < -1e-4) {
+      if (this.aimProbe(this.aimNdcX, this.aimNdcY, this.aimPoint)) {
+        this.aimCenter.copy(s.focus).add(this.panOffset);
+        this.aimGap.subVectors(this.aimPoint, this.aimCenter);
+        if (this.aimGap.lengthSq() > 1e-6) {
+          const share = Math.min(AIM_MAX_SHARE, Math.abs(this.zoomVel) * dt * AIM_SHARE_PER_DIAL);
+          this.panOffset.addScaledVector(this.aimGap, share);
+        }
+      }
+    }
+    if (Math.abs(this.zoomVel) < 1e-4) this.aimArmed = false;
+
     /* keyboard pan — arrows / WASD, speed proportional to altitude */
     const pk = this.panKeys;
     if (pk['arrowup'] || pk['w'] || pk['arrowdown'] || pk['s'] || pk['arrowleft'] || pk['a'] || pk['arrowright'] || pk['d']) {
@@ -350,7 +430,7 @@ export class CameraRig {
       if (pk['arrowright'] || pk['d']) this.panOffset.addScaledVector(this.panRight, k);
       if (pk['arrowup'] || pk['w']) this.panOffset.addScaledVector(this.panUp, k);
       if (pk['arrowdown'] || pk['s']) this.panOffset.addScaledVector(this.panUp, -k);
-      const maxPan = Math.max(60, this.dist() * 1.2);
+      const maxPan = this.panLeash();
       if (this.panOffset.length() > maxPan) this.panOffset.setLength(maxPan);
     }
 

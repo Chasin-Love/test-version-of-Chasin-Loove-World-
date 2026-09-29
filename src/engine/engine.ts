@@ -3912,11 +3912,17 @@ void main(){
   private onPointerDown = (e: PointerEvent) => {
     this.pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
     this.pointerMoved = true;
+    /* R68 — THE EXPLORER'S HAND. A plain left-drag now GLIDES (drifts the
+       view across the field); it becomes an orbit turn only when a body is
+       under the pointer (rotation is pointless over empty web, natural
+       around a world). Middle/right/Shift still pan explicitly as before.
+       The traveler can now always both move AND turn, without a modifier. */
     const pan = e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey);
+    const orbit = !pan && e.button === 0 && this.pick() !== null;
     if (e.button === 0 || pan) {
       try { this.canvas.setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
       this.dragging = true;
-      this.rig.beginDrag(pan);
+      this.rig.beginDrag(pan, orbit); /* pan (explicit) or orbit (over a body); otherwise GLIDE */
       this.lastPX = e.clientX; this.lastPY = e.clientY;
       this.downX = e.clientX; this.downY = e.clientY; this.downT = performance.now();
     }
