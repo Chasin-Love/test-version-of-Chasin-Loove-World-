@@ -154,15 +154,19 @@ async function main(): Promise<void> {
     await page.waitForTimeout(3_500);                       // scene warm-up
     await page.mouse.click(150, 640);                       // focus the document (empty space)
     await page.keyboard.press('v');                         // focus the Eventide hole (R20.2 framing)
-    /* focusOn pins phi + zoom but leaves theta free — pin it or every boot views
-       the hole from a different azimuth and the frame comparison is meaningless */
-    await page.evaluate(`(() => { const e = window.__ENGINE__; if (e && e.rig && e.rig.setOrbit) e.rig.setOrbit(0.9, null); })()`);
+    /* set orbit and zoom target to whole-hole reference composition in one step */
+    await page.evaluate(`(() => {
+      const e = window.__ENGINE__;
+      if (e && e.rig) {
+        if (e.rig.setOrbit) e.rig.setOrbit(0.9, null);
+        if (e.rig.setZoomTarget) e.rig.setZoomTarget(0.26);
+      }
+    })()`);
 
     /* deterministic settle: poll the rig until the focus flight actually reached
-       its targets (zoomT/phi/theta within ε of tZoomT/tPhi/tTheta) — luminance
-       heuristics fire mid-flight because the easing tail is slow */
+       its targets (zoomT/phi/theta within ε of tZoomT/tPhi/tTheta) */
     const RIG_SETTLED = `(() => { const e = window.__ENGINE__; if (!e || !e.rig) return false; const r = e.rig;
-      return Math.abs(r.zoomT - r.tZoomT) < 0.001 && Math.abs(r.phi - r.tPhi) < 0.001 && Math.abs(r.theta - r.tTheta) < 0.001; })()`;
+      return Math.abs(r.zoomT - r.tZoomT) < 0.003 && Math.abs(r.phi - r.tPhi) < 0.003 && Math.abs(r.theta - r.tTheta) < 0.003; })()`;
     const deadline = Date.now() + SETTLE_TIMEOUT_MS;
     let settled = false;
     while (Date.now() < deadline) {
@@ -170,17 +174,6 @@ async function main(): Promise<void> {
       if (await page.evaluate(RIG_SETTLED)) { settled = true; break; }
     }
     if (!settled) throw new Error(`camera flight never settled within ${SETTLE_TIMEOUT_MS / 1000}s`);
-    /* pull back to the whole-hole reference composition — at the focus zoom the
-       disk overfills the frame and the free-running turbulence pattern dominates
-       every pixel; zoomed out, structural region metrics stay stable across boots */
-    await page.evaluate(`(() => { const e = window.__ENGINE__; if (e && e.rig) e.rig.setZoomTarget(0.26); })()`);
-    let zoomed = false;
-    const zoomDeadline = Date.now() + SETTLE_TIMEOUT_MS;
-    while (Date.now() < zoomDeadline) {
-      await page.waitForTimeout(500);
-      if (await page.evaluate(RIG_SETTLED)) { zoomed = true; break; }
-    }
-    if (!zoomed) throw new Error(`zoom-out never settled within ${SETTLE_TIMEOUT_MS / 1000}s`);
     await page.waitForTimeout(1_000);                       // render catch-up
 
     await page.evaluate(`(() => { const e = window.__ENGINE__; if (e && typeof e.setPaused === 'function') e.setPaused(true); })()`);

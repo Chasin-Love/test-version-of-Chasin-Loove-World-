@@ -535,7 +535,7 @@ void main(){
 
 export const nebulaFrag = /* glsl */ `
 uniform float uTime;
-uniform vec3 uColorA; // Ionized gas / cyan-indigo ambient
+uniform vec3 uColorA; // Ionized gas / cyan-indigo ambient ([O-III] / H-alpha)
 uniform vec3 uColorB; // Deep dust / amber warm scattering
 uniform float uOpacity;
 varying vec2 vUv;
@@ -560,21 +560,27 @@ vec2 intersectAABB(vec3 ro, vec3 rd, vec3 boxMin, vec3 boxMax) {
 // 3D Density evaluation for procedural astronomical Pillars of Creation & Stellar Nursery
 // Returns vec4(dustDensity, gasDensity, photoIonization, temperature)
 vec4 evalNebula3D(vec3 p, float t) {
-  // Domain warping for multi-scale turbulent 3D fluid motion & filaments
-  vec3 warp = vec3(
-    fbm3(p * 2.2 + vec3(0.0, t * 0.01, 0.0)),
-    fbm3(p * 2.4 + vec3(1.7, -t * 0.008, 0.5)),
-    fbm3(p * 2.1 + vec3(3.2, 0.8, t * 0.012))
+  // Multi-scale 3D domain warping for fluid magnetohydrodynamic turbulence
+  vec3 warp1 = vec3(
+    fbm3(p * 2.2 + vec3(0.0, t * 0.012, 0.0)),
+    fbm3(p * 2.4 + vec3(1.7, -t * 0.009, 0.5)),
+    fbm3(p * 2.1 + vec3(3.2, 0.8, t * 0.014))
   );
-  vec3 pw = p + warp * 0.38;
+  vec3 pw = p + warp1 * 0.38;
+
+  // Secondary fine-scale turbulence for wisps and shockfront tendrils
+  vec3 warp2 = vec3(
+    fbm3(pw * 5.2 - vec3(t * 0.02, 0.0, 0.0)),
+    fbm3(pw * 5.5 + vec3(0.0, t * 0.025, 1.2)),
+    fbm3(pw * 4.8 + vec3(1.1, -t * 0.018, 0.0))
+  );
+  pw += warp2 * 0.12;
 
   // 1. LEFT TOWERING PILLAR (Rising from lower-middle, broad base narrowing upward, top bending right)
   vec3 p1 = pw - vec3(-0.42, -0.15, 0.02);
   p1.x += sin(p1.y * 2.8 + t * 0.02) * 0.08; // Organic curving body
   p1.z += cos(p1.y * 3.2) * 0.05;
-  float h1 = (p1.y + 0.8) / 1.35; // Normalized height [0, 1]
   float width1 = 0.22 * (1.0 - smoothstep(-0.8, 0.55, p1.y) * 0.58);
-  // Finger-like columns and eroded tip extensions at upper tip
   float tip1 = exp(-pow((p1.y - 0.48) / 0.14, 2.0)) * (sin(p1.x * 22.0 + 1.2) * 0.035 + cos(p1.z * 18.0) * 0.025);
   float d1 = length(p1.xz) - (width1 + tip1);
   float p1Mask = smoothstep(0.08, -0.06, d1) * smoothstep(-0.9, -0.65, p1.y) * (1.0 - smoothstep(0.48, 0.62, p1.y));
@@ -584,7 +590,6 @@ vec4 evalNebula3D(vec3 p, float t) {
   p2.x += cos(p2.y * 3.4 - t * 0.015) * 0.06;
   p2.z += sin(p2.y * 4.1) * 0.06;
   float width2 = 0.18 * (1.0 - smoothstep(-0.85, 0.75, p2.y) * 0.52);
-  // Protruding 3D ridges and branching structures
   float ridges2 = sin(p2.y * 14.0) * cos(p2.x * 12.0) * 0.03;
   float tip2 = exp(-pow((p2.y - 0.78) / 0.16, 2.0)) * (cos(p2.x * 26.0) * 0.04 + sin(p2.z * 20.0) * 0.03);
   float d2 = length(p2.xz) - (width2 + ridges2 + tip2);
@@ -594,7 +599,6 @@ vec4 evalNebula3D(vec3 p, float t) {
   vec3 p3 = pw - vec3(0.42, 0.25, -0.12);
   p3.x += sin(p3.y * 4.5) * 0.05;
   p3.z += cos(p3.y * 3.8) * 0.05;
-  // Multiple upward extensions / claw arms
   float claw1 = length(p3.xz - vec2(-0.06, 0.02)) - 0.09;
   float claw2 = length(p3.xz - vec2(0.08, -0.04)) - 0.07;
   float d3 = min(claw1, claw2);
@@ -605,7 +609,7 @@ vec4 evalNebula3D(vec3 p, float t) {
   float d4 = length(p4) - 0.38 + fbm3(p4 * 6.0) * 0.12;
   float p4Mask = smoothstep(0.12, -0.08, d4);
 
-  // 5. FAR-RIGHT / LOWER-RIGHT EDGE CLOUD (Enormous cloud structure entering frame partially)
+  // 5. FAR-RIGHT EDGE CLOUD (Enormous cloud structure entering frame partially)
   vec3 p5 = pw - vec3(0.85, -0.48, 0.08);
   float d5 = length(p5) - 0.48 + fbm3(p5 * 4.5) * 0.15;
   float p5Mask = smoothstep(0.15, -0.1, d5);
@@ -614,17 +618,16 @@ vec4 evalNebula3D(vec3 p, float t) {
   float mainPillars = max(max(max(p1Mask, p2Mask), p3Mask), max(p4Mask, p5Mask));
 
   // Multi-scale 3D FBM noise to carve filaments, cavities, knots, and erosion channels
-  float microNoise = fbm(pw * 5.8) * 0.5 + fbm3(pw * 14.0) * 0.25;
-  float dustDensity = clamp(mainPillars * (0.65 + microNoise * 0.75) - (microNoise - 0.35) * 0.3, 0.0, 1.0);
+  float microNoise = fbm(pw * 5.8) * 0.5 + fbm3(pw * 14.0) * 0.25 + fbm3(pw * 26.0) * 0.12;
+  float dustDensity = clamp(mainPillars * (0.68 + microNoise * 0.80) - (microNoise - 0.32) * 0.32, 0.0, 1.0);
 
   // Diffuse background nebular gas fill between structures
-  float bgGas = fbm3(pw * 1.8 + vec3(0.0, 0.0, t * 0.01)) * 0.45;
-  bgGas += exp(-length(pw.xy) * 1.8) * 0.35;
+  float bgGas = fbm3(pw * 1.8 + vec3(0.0, 0.0, t * 0.01)) * 0.48;
+  bgGas += exp(-length(pw.xy) * 1.8) * 0.38;
   float gasDensity = clamp(bgGas + dustDensity * 0.85, 0.0, 1.0);
 
   // Photo-ionization UV radiation surface erosion calculation
-  vec3 lightDirUV = normalize(vec3(-0.75, 0.65, 0.8));
-  // Compute finite difference numerical gradient of dust density for surface normals
+  vec3 lightDirUV = normalize(vec3(-0.75, 0.70, 0.65));
   vec3 eps = vec3(0.02, 0.02, 0.02);
   float dX = fbm(pw + vec3(eps.x, 0.0, 0.0)) - fbm(pw - vec3(eps.x, 0.0, 0.0));
   float dY = fbm(pw + vec3(0.0, eps.y, 0.0)) - fbm(pw - vec3(0.0, eps.y, 0.0));
@@ -632,13 +635,12 @@ vec4 evalNebula3D(vec3 p, float t) {
   vec3 grad = normalize(vec3(dX, dY, dZ) + vec3(1e-5));
   float photoIonization = pow(clamp(dot(-grad, lightDirUV), 0.0, 1.0), 1.8) * smoothstep(0.05, 0.6, dustDensity);
 
-  float temperature = smoothstep(0.1, 0.85, dustDensity) + photoIonization * 0.5;
+  float temperature = smoothstep(0.1, 0.85, dustDensity) + photoIonization * 0.55;
 
   return vec4(dustDensity, gasDensity, photoIonization, temperature);
 }
 
 void main(){
-  // Bounding local space [-1.2, 1.2]^3
   vec3 boxMin = vec3(-1.25);
   vec3 boxMax = vec3(1.25);
 
@@ -652,26 +654,32 @@ void main(){
   float tFar = hit.y;
 
   // Volumetric Raymarching Settings
-  const int STEPS = 54;
+  const int STEPS = 56;
   float stepSize = (tFar - tNear) / float(STEPS);
-  float tCurrent = tNear;
+
+  // Dithered ray jittering to eliminate step slicing/banding artifacts
+  float jitter = fract(sin(dot(gl_FragCoord.xyz, vec3(12.9898, 78.233, 45.164))) * 43758.5453) * 0.95 * stepSize;
+  float tCurrent = tNear + jitter;
 
   vec3 accumColor = vec3(0.0);
   float transmittance = 1.0;
 
-  // Color Palette Definitions
-  vec3 colDeepBackground = vec3(0.008, 0.015, 0.038); // Deep Cosmic Blue Backdrop
-  vec3 colIonizedCyan = length(uColorA) > 0.05 ? uColorA : vec3(0.12, 0.78, 0.95); // Ionized Cyan/Blue
-  vec3 colGoldenYellow = vec3(1.0, 0.72, 0.22); // Warm Golden Yellow
-  vec3 colAmberOrange = length(uColorB) > 0.05 ? uColorB : vec3(0.95, 0.48, 0.12); // Amber Orange
-  vec3 colCopperRed = vec3(0.82, 0.26, 0.06); // Copper Reddish
-  vec3 colDarkDustCharcoal = vec3(0.08, 0.05, 0.04); // Dark Charcoal Dust
-  vec3 colDarkRedUmber = vec3(0.22, 0.10, 0.05); // Dark Reddish Brown
-  vec3 colPaleCreamHighlight = vec3(1.0, 0.96, 0.88); // Subtle Pale Cream Highlights
+  // Astrophysical Emission & Absorption Colors
+  vec3 colDeepBackground = vec3(0.006, 0.012, 0.035); // Deep Cosmic Blue Vacuum
+  vec3 colIonizedCyan = length(uColorA) > 0.05 ? uColorA : vec3(0.12, 0.82, 0.96); // [O-III] Oxygen Ionized Cyan/Teal
+  vec3 colHydrogenCrimson = length(uColorB) > 0.05 ? uColorB : vec3(0.96, 0.42, 0.18); // H-alpha Hydrogen Warm Amber/Crimson
+  vec3 colGoldenYellow = vec3(1.0, 0.78, 0.28); // Hot Ionization Shock Front
+  vec3 colDarkDustCharcoal = vec3(0.06, 0.04, 0.035); // Deep Cold Opaque Dust Core
+  vec3 colDarkRedUmber = vec3(0.20, 0.09, 0.05); // Illuminated Dark Vein
+  vec3 colCreamHighlight = vec3(1.0, 0.97, 0.90); // Forward Scatter Highlight
 
-  float simTime = uTime * 0.05;
+  vec3 lightDirUV = normalize(vec3(-0.75, 0.70, 0.65));
+  float cosTheta = dot(rd, lightDirUV);
+  // Henyey-Greenstein Forward Phase Function (g = 0.45)
+  float hgPhase = (1.0 - 0.2025) / pow(1.0 + 0.2025 - 0.90 * cosTheta, 1.5);
 
   for (int i = 0; i < STEPS; i++) {
+    if (tCurrent >= tFar || transmittance < 0.01) break;
     vec3 p = ro + rd * tCurrent;
 
     // Sample 3D Nebular Density
@@ -682,29 +690,30 @@ void main(){
     float temp = nData.w;
 
     if (dGas > 0.001 || dDust > 0.001) {
-      // Physical Dust Color Transition (Charcoal -> Reddish Brown -> Illuminated Amber)
-      vec3 dustColor = mix(colDarkDustCharcoal, colDarkRedUmber, smoothstep(0.1, 0.6, dDust));
+      // Volumetric Self-Shadowing: sample density slightly offset along UV radiation vector
+      vec4 shadowSample = evalNebula3D(p + lightDirUV * 0.08, uTime);
+      float selfShadow = exp(-shadowSample.x * 3.5);
 
-      // Physical Gas Emission Color Transition (Golden Yellow -> Amber -> Copper -> Cream Highlights)
-      vec3 gasColor = mix(colCopperRed, colAmberOrange, smoothstep(0.1, 0.45, temp));
-      gasColor = mix(gasColor, colGoldenYellow, smoothstep(0.45, 0.8, temp));
-      gasColor = mix(gasColor, colPaleCreamHighlight, smoothstep(0.8, 1.0, temp));
+      // Physical Dust Absorption & Silhouetting
+      vec3 dustColor = mix(colDarkDustCharcoal, colDarkRedUmber, smoothstep(0.08, 0.55, dDust));
 
-      // Photo-ionization UV Rim Glow (Cool blue-white & electric cyan edges)
-      vec3 rimGlow = mix(colIonizedCyan, vec3(0.85, 0.95, 1.0), photoIon * 0.6) * photoIon * 2.4;
+      // Physical Gas Emission Line Transition ([O-III] Teal -> H-alpha Crimson/Amber -> Gold -> Cream)
+      vec3 gasColor = mix(colHydrogenCrimson, colGoldenYellow, smoothstep(0.12, 0.55, temp));
+      gasColor = mix(gasColor, colCreamHighlight, smoothstep(0.75, 1.0, temp));
 
-      // Combine emission and scattering
-      vec3 stepEmission = mix(gasColor, dustColor, dDust * 0.88) * dGas * 1.6 + rimGlow;
+      // Photo-ionization UV Rim Glow on front-facing shock surfaces
+      vec3 rimGlow = mix(colIonizedCyan, vec3(0.90, 0.98, 1.0), photoIon * 0.6) * photoIon * 2.8 * selfShadow;
 
-      // Optical Absorption / Extinction
-      float stepAbsorption = (dDust * 4.8 + dGas * 0.85) * stepSize;
+      // Forward scattering enhancement on illuminated gas
+      vec3 stepEmission = mix(gasColor * (0.45 + 0.85 * selfShadow * hgPhase), dustColor, dDust * 0.86) * dGas * 1.65 + rimGlow;
+
+      // Optical Absorption & Extinction
+      float stepAbsorption = (dDust * 5.2 + dGas * 0.90) * stepSize;
       float stepTransmittance = exp(-stepAbsorption);
 
       // Accumulate color scaled by current transmittance
       accumColor += transmittance * stepEmission * (1.0 - stepTransmittance);
       transmittance *= stepTransmittance;
-
-      if (transmittance < 0.015) break; // Early ray termination when optically opaque
     }
 
     tCurrent += stepSize;
