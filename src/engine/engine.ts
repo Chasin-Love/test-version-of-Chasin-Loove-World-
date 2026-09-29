@@ -3914,7 +3914,25 @@ void main(){
 
   private onPointerDown = (e: PointerEvent) => {
     this.pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    /* R68 touch — the tap's hover card must position at the TAP point
+       (a finger often never produces a pointermove) */
+    this.mouseScreenX = e.clientX;
+    this.mouseScreenY = e.clientY;
     this.pointerMoved = true;
+    /* R68 touch bookkeeping — a second finger hands the gesture to the
+       rig's own pinch/pan pair; the pointer stream must not double-drive */
+    if (e.pointerType === 'touch') {
+      this.touchCount += 1;
+      if (this.touchCount === 1) {
+        this.twoFingerSession = false;
+        this.armLongPress(e);
+      } else {
+        this.twoFingerSession = true;
+        this.disarmLongPress();
+        if (this.clickTimer) { clearTimeout(this.clickTimer); this.clickTimer = null; }
+        if (this.dragging) { this.dragging = false; this.rig.endDrag(); }
+      }
+    }
     /* R68 — THE EXPLORER'S HAND. A plain left-drag now GLIDES (drifts the
        view across the field); it becomes an orbit turn only when a body is
        under the pointer (rotation is pointless over empty web, natural
@@ -3931,25 +3949,66 @@ void main(){
     }
   };
 
+  /* R68 — touch gesture bookkeeping */
+  private touchCount = 0;
+  private twoFingerSession = false;
+  private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private longPressStart = { x: 0, y: 0 };
+
+  private armLongPress(e: PointerEvent) {
+    this.disarmLongPress();
+    this.longPressStart = { x: e.clientX, y: e.clientY };
+    this.longPressTimer = setTimeout(() => {
+      this.longPressTimer = null;
+      /* a held finger over an object is a right-click: the context menu */
+      const id = this.pick();
+      if (id) this.cb.onContext(id, this.longPressStart.x, this.longPressStart.y);
+    }, 550);
+  }
+  private disarmLongPress() {
+    if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
+  }
+
   private onPointerMove = (e: PointerEvent) => {
     this.mouseScreenX = e.clientX;
     this.mouseScreenY = e.clientY;
-    if (this.dragging) {
-      const dx = e.clientX - this.lastPX, dy = e.clientY - this.lastPY;
-      this.rig.dragMove(dx, dy);
-      this.lastPX = e.clientX; this.lastPY = e.clientY;
+    /* R68 touch — with two fingers down the rig's own pinch/pan pair owns
+       the gesture; the per-finger pointer stream stands down */
+    const twoFingerTouch = e.pointerType === 'touch' && this.touchCount > 1;
+    if (!twoFingerTouch) {
+      if (this.dragging) {
+        const dx = e.clientX - this.lastPX, dy = e.clientY - this.lastPY;
+        this.rig.dragMove(dx, dy);
+        this.lastPX = e.clientX; this.lastPY = e.clientY;
+        if (this.longPressTimer && Math.hypot(e.clientX - this.longPressStart.x, e.clientY - this.longPressStart.y) > 12) {
+          this.disarmLongPress();
+        }
+      }
     }
     this.pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
     this.pointerMoved = true;
   };
 
   private finishPointerDrag(e: PointerEvent, allowClick: boolean) {
+    /* R68 touch — a lifted finger of a multi-finger gesture never clicks;
+       the last finger up just closes the session */
+    if (e.pointerType === 'touch') {
+      this.touchCount = Math.max(0, this.touchCount - 1);
+      this.disarmLongPress();
+      if (this.touchCount > 0 || this.twoFingerSession) {
+        if (this.touchCount === 0) this.twoFingerSession = false;
+        if (this.dragging) { this.dragging = false; this.rig.endDrag(); }
+        return;
+      }
+    }
     if (!this.dragging) return;
     this.dragging = false;
     this.rig.endDrag();
     try { this.canvas.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
-    if (allowClick && moved < 7 && performance.now() - this.downT < 600 && e.button === 0) this.handleClick();
+    if (allowClick && moved < 12 && performance.now() - this.downT < 600 && (e.button === 0 || e.pointerType === 'touch')) {
+      this.handleClick(e.pointerType === 'touch');
+    }
   }
 
   private onPointerUp = (e: PointerEvent) => {
@@ -3957,6 +4016,10 @@ void main(){
   };
 
   private onPointerCancel = (e: PointerEvent) => {
+    if (e.pointerType === 'touch') {
+      this.touchCount = Math.max(0, this.touchCount - 1);
+      this.disarmLongPress();
+    }
     this.finishPointerDrag(e, false);
   };
 
@@ -4086,7 +4149,41 @@ void main(){
     return null;
   }
 
-  private handleClick() {
+  /** R68 — THE TOUCH GRAMMAR: a tap behaves like hover first — it raises
+      the object's card without acting (the mouse has hover; the finger has
+      no hover, so the FIRST tap is its hover). A second tap on the same
+      object inside the window acts (the click). Select/deselect state is
+      restored on the acting tap so the click path plays exactly as a
+      mouse click would. */
+  private touchInspectId: string | null = null;
+  private touchInspectT = 0;
+  private static readonly TOUCH_INSPECT_WINDOW = 1600; /* ms */
+
+  private handleClick(isTouch = false) {
+    if (isTouch) {
+      const id = this.pick();
+      const now = performance.now();
+      const same = id && id === this.touchInspectId && now - this.touchInspectT < UniverseEngine.TOUCH_INSPECT_WINDOW;
+      this.touchInspectId = same ? null : id;
+      this.touchInspectT = now;
+      if (!same) {
+        if (id) {
+          /* the inspect tap — act as hover so the card rises; no selection,
+             no action (the canvas cursor path also refreshes the cursor) */
+          this.hoveredId = id;
+          this.cb.onHover(id, this.mouseScreenX, this.mouseScreenY);
+        } else {
+          /* a tap on empty space dismisses any raised card */
+          this.hoveredId = null;
+          this.cb.onHover(null);
+        }
+        return;
+      }
+      /* the acting tap — clear the inspect state; the selection path below
+         re-derives the hover state naturally */
+      this.hoveredId = null;
+      this.cb.onHover(null);
+    }
     const id = this.pick();
     /* THE COSMIC ECHO — clicking a memory meteor reopens its page */
     if (id && id.startsWith('echo:')) {
