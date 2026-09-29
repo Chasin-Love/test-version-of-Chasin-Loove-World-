@@ -913,6 +913,9 @@ export class UniverseEngine {
     this.renderer.setClearColor('#04060c', 1);
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 8000000);
     this.rig = new CameraRig(this.camera, canvas);
+    /* R68 — the cursor-anchored dive: the rig asks, the engine answers with
+       the world point under the wheel (see resolveAimPoint). */
+    this.rig.setAimProbe(this.resolveAimPoint);
     /* ROUND 61 — the last resting view is checkpointed when the app closes
        (web/app window dismissal can beat the 5 s idle cadence). Same guard
        as the frame path: only a resting view is worth remembering, and the
@@ -3971,6 +3974,37 @@ void main(){
   };
   private mouseScreenX = 0;
   private mouseScreenY = 0;
+
+  /** R68 — resolve a screen ray to a world point for the cursor-anchored
+      dive. Object wins (body / galaxy / cluster / reality bubble), otherwise
+      a bounded point down the ray: min(rayLen·0.6, aim reach) from the
+      camera, clamped inside the stage's exploration bubble so empty-space
+      dives land INSIDE the structure you are exploring. */
+  private resolveAimPoint = (ndcX: number, ndcY: number, out: THREE.Vector3): boolean => {
+    this._vScratch4.set(ndcX, ndcY, 0.5).unproject(this.camera);
+    const dir = this._vScratch4.sub(this.camera.position).normalize();
+    this.raycaster.set(this.camera.position, dir);
+    const d = this.currentDist();
+    /* object hit first — mirrors pick()'s stage branches with cheap colliders */
+    if (this.cosmicStage === 'multiverse' && this.gMultiverse?.visible) {
+      this.raycaster.far = 5000000;
+      const hits = this.raycaster.intersectObjects(this.multiverseColliders, false);
+      if (hits.length > 0) { out.copy(hits[0].point); return true; }
+    } else if (d <= 1400) {
+      this.raycaster.far = d * 3 + 120;
+      const list = this.innerColliderList.length > 0 ? this.colliderList.concat(this.innerColliderList) : this.colliderList;
+      const hits = this.raycaster.intersectObjects(list, false);
+      if (hits.length > 0) { out.copy(hits[0].point); return true; }
+    } else if (this.cosmicStage === 'web' && d < 120000 && this.galaxyStageColliders.length) {
+      this.raycaster.far = d * 4 + 6000;
+      const hits = this.raycaster.intersectObjects(this.galaxyStageColliders, false);
+      if (hits.length > 0) { out.copy(hits[0].point); return true; }
+    }
+    /* empty field — walk the ray a bounded step from the camera */
+    const reach = d * 0.85;
+    out.copy(this.camera.position).addScaledVector(dir, reach);
+    return true;
+  };
 
   private pick(): string | null {
     this.raycaster.setFromCamera(this.pointer, this.camera);
